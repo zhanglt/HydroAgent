@@ -108,12 +108,12 @@ proxy: http://10.0.0.8:30000
 如果第三方服务在 Codex 中配置 `wire_api = "responses"`，本项目对应配置为：
 
 ```yaml
-openai_base_url: https://api.1813051106.xyz/openai
+openai_base_url: https://gateway.example/openai
 openai_wire_api: responses
 model_name: gpt-6.1-sol
 ```
 
-`openai_base_url` 保留服务商给出的基础地址，不追加 `/responses`；SDK 根据协议追加路径。Responses 模式使用流式请求，并将系统指令的出站角色映射为 `developer`，兼容拒绝 `system` 角色的网关。Chat Completions 模式继续保留原消息格式与 DeepSeek 推理字段。故障原因和验证见[第三方 Responses 400 修复记录](docs/fix-responses-gateway-400.md)。
+以上域名为占位示例，实际服务地址仅填写在本地私有 `config.yaml`，不要写入待提交的文档或日志。`openai_base_url` 保留服务商给出的基础地址，不追加 `/responses`；SDK 根据协议追加路径。Responses 模式使用流式请求，并将系统指令的出站角色映射为 `developer`，兼容拒绝 `system` 角色的网关。Chat Completions 模式继续保留原消息格式与 DeepSeek 推理字段。故障原因和验证见[第三方 Responses 400 修复记录](docs/fix-responses-gateway-400.md)。
 
 生产或多人环境建议在 `config.yaml` 中直接配置 API Key，也可通过环境变量覆盖：
 

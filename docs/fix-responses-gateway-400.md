@@ -4,7 +4,7 @@
 
 ## 现象与实际原因
 
-`POST /api/chat` 返回 HTTP 200，随后模型请求 `POST https://api.1813051106.xyz/openai/responses` 返回 400。HTTP 200 只代表 SSE 通道已建立；模型错误在后续流事件中返回，不能据此判断聊天成功。
+`POST /api/chat` 返回 HTTP 200，随后第三方网关的 `POST /openai/responses` 请求返回 400。HTTP 200 只代表 SSE 通道已建立；模型错误在后续流事件中返回，不能据此判断聊天成功。本文使用占位域名，实际服务地址仅保留在本地私有配置中。
 
 现场配置模型为 `gpt-6.1-sol`。LangChain 在该模型绑定工具时自动选择 Responses API，但请求中仍有 `role: system` 的输入项。使用应用实际模型类和一个无副作用的测试工具复现后，读取到上游响应正文：
 
@@ -19,14 +19,14 @@
 用户的 Codex 配置：
 
 ```toml
-base_url = "https://api.1813051106.xyz/openai"
+base_url = "https://gateway.example/openai"
 wire_api = "responses"
 ```
 
 本项目 `config.yaml` 对应：
 
 ```yaml
-openai_base_url: https://api.1813051106.xyz/openai
+openai_base_url: https://gateway.example/openai
 openai_wire_api: responses
 model_name: gpt-6.1-sol
 ```
