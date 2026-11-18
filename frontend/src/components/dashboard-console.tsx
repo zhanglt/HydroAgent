@@ -1,6 +1,6 @@
 'use client'
 
-import ReactECharts from 'echarts-for-react'
+import dynamic from 'next/dynamic'
 import { useQuery } from '@tanstack/react-query'
 import { motion, type Variants } from 'framer-motion'
 import { CloudRain, Droplets, Power, Sun, Thermometer } from 'lucide-react'
@@ -10,15 +10,20 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { SectionBadge } from '@/components/ui/section-badge'
 import { apiGet } from '@/lib/api-client'
 import { labelFor } from '@/lib/labels'
-import { DashboardData, RuntimeSettings, Zone } from '@/lib/types'
+import { DashboardData, RuntimeSettings, WeatherData, Zone } from '@/lib/types'
 import { formatNumber1, formatPercent1, toNumber } from '@/lib/format'
 import { formatDateTime } from '@/lib/utils'
 
+const MoistureChart = dynamic(() => import('@/components/moisture-chart'), {
+  ssr: false,
+  loading: () => <div role="status" className="min-h-80 bg-slate-50 p-4 text-sm text-slate-500">正在加载图表…</div>,
+})
+
 type ZoneView = {
   zone: Zone
-  soilMoisture: number
+  soilMoisture: number | null
   threshold: number
-  deficit: number
+  deficit: number | null
   actuator?: Zone['actuators'][number]
 }
 
@@ -53,13 +58,14 @@ function buildZoneRows(dashboard: DashboardData): ZoneView[] {
   const sensorRows = getSensorRows(dashboard)
   return dashboard.zones.map((zone) => {
     const reading = sensorRows.find((row) => String(row.zone_id || '') === zone.zone_id)
-    const soilMoisture = toNumber(reading?.soil_moisture)
+    const value = reading?.soil_moisture
+    const soilMoisture = typeof value === 'number' && Number.isFinite(value) ? value : null
     const threshold = toNumber(zone.soil_moisture_threshold, 40)
     return {
       zone,
       soilMoisture,
       threshold,
-      deficit: Math.max(0, threshold - soilMoisture),
+      deficit: soilMoisture === null ? null : Math.max(0, threshold - soilMoisture),
       actuator: zone.actuators[0],
     }
   })
@@ -118,7 +124,7 @@ function buildMoistureOption(zoneRows: ZoneView[]) {
             ],
           },
         },
-        data: zoneRows.map((item) => Number(item.soilMoisture.toFixed(1))),
+        data: zoneRows.map((item) => item.soilMoisture === null ? null : Number(item.soilMoisture.toFixed(1))),
       },
       {
         name: '阈值',
@@ -223,7 +229,7 @@ export function DashboardConsole({
 }) {
   const dashboardQuery = useQuery({
     queryKey: ['dashboard'],
-    queryFn: () => apiGet<DashboardData>('/api/dashboard'),
+    queryFn: () => apiGet<DashboardData>('/api/dashboard?include_weather=false'),
     initialData: initialDashboard,
     refetchInterval: 5_000,
   })
@@ -234,15 +240,21 @@ export function DashboardConsole({
     enabled: Boolean(initialSettings),
     refetchInterval: 30_000,
   })
+  const weatherQuery = useQuery({
+    queryKey: ['weather'],
+    queryFn: () => apiGet<WeatherData>('/api/weather'),
+    staleTime: (query) => query.state.data?.status === 'ok' ? 600_000 : 5_000,
+    refetchInterval: (query) => query.state.data?.status === 'ok' ? 600_000 : 30_000,
+  })
 
-  const dashboard = dashboardQuery.data
+  const dashboard = { ...dashboardQuery.data, weather: weatherQuery.data ?? null }
   const settings = settingsQuery.data
   const zoneRows = buildZoneRows(dashboard)
   const rainfall = dashboard.sensors?.average.rainfall ?? null
   const lastUpdated = formatDateTime(dashboard.status?.timestamp || dashboard.sensors?.timestamp)
 
   return (
-    <motion.div className="console-dashboard flex flex-col gap-4" variants={containerVariants} initial="hidden" animate="show">
+    <motion.div className="console-dashboard flex flex-col gap-4" variants={containerVariants} initial={false} animate="show">
       <motion.section variants={itemVariants} className="surface-panel flex flex-col gap-3">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div className="max-w-2xl">
@@ -282,7 +294,7 @@ export function DashboardConsole({
               <EmptyState className="flex-1" title="暂无分区数据" description="核心未返回分区与传感器信息，图表保持空态。" />
             ) : (
               <div className="min-h-[320px] flex-1">
-                <ReactECharts option={buildMoistureOption(zoneRows)} style={{ height: '100%', minHeight: 320 }} />
+                <MoistureChart option={buildMoistureOption(zoneRows)} />
               </div>
             )}
           </motion.section>
@@ -350,6 +362,9 @@ export function DashboardConsole({
                 {formatNumber1(rainfall, 'MM')}
               </Badge>
             </div>
+            <p className="mb-3 text-xs text-slate-500" role="status">
+              {weatherQuery.isPending ? '正在加载天气预报…' : weatherQuery.isError ? '天气服务暂时不可用' : dashboard.weather?.status === 'stale' ? '预报已过期，正在等待更新' : dashboard.weather?.status === 'unavailable' ? '暂无有效天气数据' : `采集时间：${formatDateTime(dashboard.weather?.collected_at)}`}
+            </p>
             {(dashboard.weather?.forecast || []).length === 0 ? (
               <EmptyState className="flex-1" title="暂无预报" description="天气服务未返回未来窗口，自动灌溉将保持谨慎。" icon={CloudRain} />
             ) : (

@@ -7,15 +7,15 @@ import { Button } from '@/components/ui/button'
 import { SectionBadge } from '@/components/ui/section-badge'
 import { apiGet, apiSend } from '@/lib/api-client'
 import { ACTION_LABELS, RISK_LABELS, labelFor } from '@/lib/labels'
-import { DashboardData, HistoryData, IrrigationPlan, UserProfile, Zone } from '@/lib/types'
+import { OperationsZones, OperationsPlans, IrrigationPlan, UserProfile, Zone } from '@/lib/types'
 import { formatNumber1, formatPercent1, toNumber } from '@/lib/format'
 import { cn, formatDateTime } from '@/lib/utils'
 
 type ZoneView = {
   zone: Zone
-  soilMoisture: number
+  soilMoisture: number | null
   threshold: number
-  deficit: number
+  deficit: number | null
   actuator?: Zone['actuators'][number]
   activePlan?: IrrigationPlan
 }
@@ -88,21 +88,17 @@ function InlineStatusDot({ label, active = false }: { label: string; active?: bo
   )
 }
 
-function getSensorRows(dashboard: DashboardData) {
-  return (dashboard.sensors?.sensors || []) as Array<Record<string, unknown>>
-}
-
-function buildZoneRows(dashboard: DashboardData, activePlans: IrrigationPlan[]): ZoneView[] {
-  const sensorRows = getSensorRows(dashboard)
-  return dashboard.zones.map((zone) => {
-    const reading = sensorRows.find((row) => String(row.zone_id || '') === zone.zone_id)
-    const soilMoisture = toNumber(reading?.soil_moisture)
+function buildZoneRows(data: OperationsZones | undefined, activePlans: IrrigationPlan[]): ZoneView[] {
+  return (data?.zones || []).map((zone) => {
+    const reading = data?.sensor_summaries?.find((row) => row.zone_id === zone.zone_id)
+    const moisture = reading?.average.soil_moisture
+    const soilMoisture = reading?.status === 'ok' && typeof moisture === 'number' && Number.isFinite(moisture) ? moisture : null
     const threshold = toNumber(zone.soil_moisture_threshold, 40)
     return {
       zone,
       soilMoisture,
       threshold,
-      deficit: Math.max(0, threshold - soilMoisture),
+      deficit: soilMoisture === null ? null : Math.max(0, threshold - soilMoisture),
       actuator: zone.actuators[0],
       activePlan: activePlans.find((plan) => plan.zone_id === zone.zone_id),
     }
@@ -119,7 +115,7 @@ function CompactEmpty({ title, description }: { title: string; description: stri
 }
 
 function ZoneStatusPanel({ item }: { item: ZoneView }) {
-  const severe = item.deficit >= 15
+  const severe = item.deficit !== null && item.deficit >= 15
   const actuatorState = item.actuator?.status || 'unknown'
   const metrics = [
     { label: '湿度', value: formatPercent1(item.soilMoisture), valueClassName: severe ? 'text-red-700' : 'text-slate-900' },
@@ -419,25 +415,25 @@ function ActivePlanList({
 }
 
 export function OperationsConsole({
-  initialHistory,
-  initialDashboard,
+  initialZones,
+  initialPlans,
   currentUser,
 }: {
-  initialHistory: HistoryData
-  initialDashboard: DashboardData
+  initialZones?: OperationsZones
+  initialPlans?: OperationsPlans
   currentUser: UserProfile
 }) {
   const queryClient = useQueryClient()
-  const historyQuery = useQuery({
-    queryKey: ['history'],
-    queryFn: () => apiGet<HistoryData>('/api/history'),
-    initialData: initialHistory,
+  const plansQuery = useQuery({
+    queryKey: ['operations', 'plans'],
+    queryFn: () => apiGet<OperationsPlans>('/api/operations?section=plans'),
+    initialData: initialPlans,
     refetchInterval: 10_000,
   })
-  const dashboardQuery = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: () => apiGet<DashboardData>('/api/dashboard'),
-    initialData: initialDashboard,
+  const zonesQuery = useQuery({
+    queryKey: ['operations', 'zones'],
+    queryFn: () => apiGet<OperationsZones>('/api/operations?section=zones'),
+    initialData: initialZones,
     refetchInterval: 5_000,
   })
   const planActionMutation = useMutation({
@@ -446,6 +442,7 @@ export function OperationsConsole({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['history'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['operations'] })
     },
   })
   const generatePlanMutation = useMutation({
@@ -458,24 +455,33 @@ export function OperationsConsole({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['history'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      queryClient.invalidateQueries({ queryKey: ['operations'] })
     },
   })
 
   const activePlans = useMemo(
-    () => (historyQuery.data?.active_plans || historyQuery.data?.plans || []).filter(isActivePlan),
-    [historyQuery.data?.active_plans, historyQuery.data?.plans],
+    () => (plansQuery.data?.active_plans || []).filter(isActivePlan),
+    [plansQuery.data?.active_plans],
   )
-  const zoneRows = useMemo(() => buildZoneRows(dashboardQuery.data, activePlans), [dashboardQuery.data, activePlans])
+  const zoneRows = useMemo(() => buildZoneRows(zonesQuery.data, activePlans), [zonesQuery.data, activePlans])
 
   return (
     <div className="grid h-full grid-cols-1 items-stretch gap-4 lg:grid-cols-12">
       <div className="flex h-full min-w-0 flex-col lg:col-span-7">
-        <ZoneStatusList rows={zoneRows} loading={dashboardQuery.isFetching} />
+        {zonesQuery.isError || zonesQuery.data?.errors.zones ? (
+          <CompactEmpty title="分区读取失败" description="分区数据暂时不可用，正在等待重试。" />
+        ) : zonesQuery.isPending ? (
+          <CompactEmpty title="正在加载分区状态" description="正在读取传感器和执行器状态。" />
+        ) : <ZoneStatusList rows={zoneRows} loading={zonesQuery.isFetching} />}
       </div>
 
       <div className="flex h-full min-w-0 flex-col gap-4 lg:col-span-5">
-        <PlanGenerationForm zones={dashboardQuery.data.zones} currentUser={currentUser} mutation={generatePlanMutation} />
-        <ActivePlanList plans={activePlans} currentUser={currentUser} mutation={planActionMutation} loading={historyQuery.isFetching} />
+        <PlanGenerationForm zones={zonesQuery.data?.zones || []} currentUser={currentUser} mutation={generatePlanMutation} />
+        {plansQuery.isError || plansQuery.data?.errors.plans ? (
+          <CompactEmpty title="活跃计划读取失败" description="无法确认最新计划状态，请稍后重试。" />
+        ) : plansQuery.isPending ? (
+          <CompactEmpty title="正在加载活跃计划" description="正在读取计划及审批状态。" />
+        ) : <ActivePlanList plans={activePlans} currentUser={currentUser} mutation={planActionMutation} loading={plansQuery.isFetching} />}
       </div>
     </div>
   )

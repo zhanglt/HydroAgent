@@ -6,11 +6,11 @@ from __future__ import annotations
 import datetime as dt
 from collections import defaultdict
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.database.models import AlertEvent, IrrigationPlan, SensorData
-from src.services.alert_service import list_alert_events
-from src.services.irrigation_service import get_zone_status, list_plans, list_zones
+from src.services.irrigation_service import get_sensor_summary, get_zone_by_id, list_plans, list_zones
 
 
 def _is_executed_plan(plan: IrrigationPlan) -> bool:
@@ -40,39 +40,46 @@ def _bucket_label(timestamp: dt.datetime, granularity: str) -> str:
 
 def get_zone_trend(db: Session, zone_id: str, range_key: str = "7d") -> dict:
     since, granularity = _resolve_window(range_key)
-    status = get_zone_status(db, zone_id)
-    zone = status["zone"]
+    zone = get_zone_by_id(db, zone_id)
+    if not zone:
+        raise ValueError(f"Zone not found: {zone_id}")
     labels: list[str] = []
-    moisture_values: list[float] = []
-
+    moisture_values: list[float | None] = []
+    sensor_ids = [binding.sensor_id for binding in zone.sensor_bindings if binding.is_enabled]
+    dialect = db.get_bind().dialect.name
+    if granularity == "day":
+        bucket = func.date(SensorData.timestamp)
+    elif dialect == "postgresql":
+        bucket = func.date_trunc("hour", SensorData.timestamp)
+    elif dialect == "mysql":
+        bucket = func.date_format(SensorData.timestamp, "%Y-%m-%d %H:00:00")
+    else:
+        bucket = func.strftime("%Y-%m-%d %H:00:00", SensorData.timestamp)
     rows = (
-        db.query(SensorData)
-        .filter(SensorData.timestamp >= since)
-        .order_by(SensorData.timestamp.asc())
+        db.query(bucket.label("bucket"), func.avg(SensorData.soil_moisture))
+        .filter(SensorData.timestamp >= since, SensorData.sensor_id.in_(sensor_ids),
+                SensorData.soil_moisture.between(0, 100))
+        .group_by(bucket)
+        .order_by(bucket)
         .all()
     )
-    grouped: dict[str, list[float]] = defaultdict(list)
-    for row in rows:
-        if row.sensor_id not in zone.get("sensor_ids", []):
-            continue
-        grouped[_bucket_label(row.timestamp, granularity)].append(float(row.soil_moisture or 0.0))
-
-    for label, values in grouped.items():
-        labels.append(label)
-        moisture_values.append(round(sum(values) / len(values), 2))
+    for timestamp, average in rows:
+        labels.append(_bucket_label(dt.datetime.fromisoformat(str(timestamp)), granularity))
+        moisture_values.append(round(float(average), 2))
 
     if not labels:
-        average = status["sensor_summary"].get("average", {})
+        average = get_sensor_summary(db, zone).get("average", {})
         labels = [_bucket_label(dt.datetime.utcnow(), granularity)]
-        moisture_values = [round(float(average.get("soil_moisture", 0.0) or 0.0), 2)]
+        value = average.get("soil_moisture")
+        moisture_values = [round(float(value), 2) if value is not None else None]
 
     return {
         "zone_id": zone_id,
-        "zone_name": zone["name"],
+        "zone_name": zone.name,
         "range": range_key,
         "labels": labels,
         "soil_moisture": moisture_values,
-        "threshold": [float(zone.get("soil_moisture_threshold", 40.0)) for _ in labels],
+        "threshold": [float(zone.soil_moisture_threshold if zone.soil_moisture_threshold is not None else 40.0) for _ in labels],
     }
 
 
@@ -117,21 +124,23 @@ def get_alert_trend(db: Session, range_key: str = "7d") -> dict:
 def get_analytics_overview(db: Session, range_key: str = "7d") -> dict:
     zones = list_zones(db)
     zone_health = []
-    pending_alerts = [alert for alert in list_alert_events(db, limit=200) if alert.status != "resolved"]
+    # Reading analytics must not trigger a weather-dependent alert evaluation.
+    pending_alerts = db.query(AlertEvent).filter(AlertEvent.status.in_(["open", "acknowledged"])).all()
     plans = list_plans(db, limit=200)
 
     for zone in zones:
-        status = get_zone_status(db, zone.zone_id)
-        average = status["sensor_summary"].get("average", {})
-        moisture = float(average.get("soil_moisture", 0.0) or 0.0)
-        threshold = float(zone.soil_moisture_threshold or 40.0)
+        summary = get_sensor_summary(db, zone)
+        average = summary.get("average", {})
+        moisture = average.get("soil_moisture") if summary.get("status") == "ok" else None
+        threshold = float(zone.soil_moisture_threshold if zone.soil_moisture_threshold is not None else 40.0)
+        actuator = next((item for item in zone.actuators if item.is_enabled), None)
         zone_health.append(
             {
                 "zone_id": zone.zone_id,
                 "zone_name": zone.name,
-                "soil_moisture": round(moisture, 2),
-                "deficit": round(max(0.0, threshold - moisture), 2),
-                "actuator_status": status["actuator"]["status"] if status.get("actuator") else "unknown",
+                "soil_moisture": round(moisture, 2) if moisture is not None else None,
+                "deficit": round(max(0.0, threshold - moisture), 2) if moisture is not None else None,
+                "actuator_status": actuator.status if actuator else "unknown",
                 "alert_count": sum(1 for alert in pending_alerts if alert.zone_id == zone.zone_id),
             }
         )

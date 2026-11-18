@@ -7,13 +7,13 @@ WORKDIR /build
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::http::Proxy="http://10.0.0.8:30000" update && apt-get  -o Acquire::http::Proxy="http://10.0.0.8:30000" install -y --no-install-recommends \
     build-essential \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN python -m pip wheel --wheel-dir /wheels -r requirements.txt
+RUN python -m pip wheel --proxy  http://10.0.0.8:30000  --wheel-dir /wheels -r requirements.txt
 
 FROM python:3.12-slim AS runtime
 
@@ -25,12 +25,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get  -o Acquire::http::Proxy="http://10.0.0.8:30000" update && apt-get  -o Acquire::http::Proxy="http://10.0.0.8:30000" install -y --no-install-recommends \
     fonts-wqy-microhei \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-cache-dir --no-compile /wheels/* \
+RUN python -m pip install --no-cache-dir --proxy  http://10.0.0.8:30000  --no-compile /wheels/* \
     # 清理 Python 包内测试目录和字节码，避免运行时镜像携带构建/测试产物。
     && find /usr/local/lib/python3.12/site-packages -depth \
         \( -type d \( -name tests -o -name test -o -name __pycache__ \) \

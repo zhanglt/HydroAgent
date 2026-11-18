@@ -44,7 +44,7 @@ export function AnalyticsOverviewPanel({ overview }: { overview: AnalyticsOvervi
         type: 'line',
         smooth: true,
         symbol: 'none',
-        data: overview.soil_trend.soil_moisture.map((value) => Number(value.toFixed(1))),
+        data: overview.soil_trend.soil_moisture.map((value) => value === null ? null : Number(value.toFixed(1))),
         lineStyle: { width: 3, color: '#0052FF' },
         areaStyle: {
           color: {
@@ -65,7 +65,7 @@ export function AnalyticsOverviewPanel({ overview }: { overview: AnalyticsOvervi
         type: 'line',
         smooth: true,
         symbol: 'none',
-        data: overview.soil_trend.threshold.map((value) => Number(value.toFixed(1))),
+        data: overview.soil_trend.threshold.map((value) => value === null ? null : Number(value.toFixed(1))),
         lineStyle: { width: 2, color: '#CBD5E1', type: 'dashed' },
       },
     ],
@@ -109,7 +109,7 @@ export function AnalyticsOverviewPanel({ overview }: { overview: AnalyticsOvervi
     yAxis: { type: 'category', data: overview.zone_health.map((item) => item.zone_name), ...axisStyle },
     visualMap: {
       min: 0,
-      max: Math.max(100, ...overview.zone_health.map((item) => Math.max(item.soil_moisture, item.deficit, item.alert_count))),
+      max: Math.max(100, ...overview.zone_health.map((item) => Math.max(item.soil_moisture ?? 0, item.deficit ?? 0, item.alert_count))),
       calculable: false,
       orient: 'horizontal',
       left: 'center',
@@ -120,10 +120,10 @@ export function AnalyticsOverviewPanel({ overview }: { overview: AnalyticsOvervi
       {
         type: 'heatmap',
         data: overview.zone_health.flatMap((item, index) => [
-          [0, index, Number(item.soil_moisture.toFixed(1))],
-          [1, index, Number(item.deficit.toFixed(1))],
+          [0, index, item.soil_moisture === null ? null : Number(item.soil_moisture.toFixed(1))],
+          [1, index, item.deficit === null ? null : Number(item.deficit.toFixed(1))],
           [2, index, item.alert_count],
-        ]),
+        ].filter((cell) => cell[2] !== null)),
         label: { show: true, color: '#0F172A' },
       },
     ],

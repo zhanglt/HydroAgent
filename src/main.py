@@ -55,6 +55,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def request_timing(request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration = (time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={duration:.1f}"
+    logger.info("http_request method=%s path=%s status=%s duration_ms=%.1f",
+                request.method, request.url.path, response.status_code, duration)
+    return response
+
 # 注册 API 路由
 app.include_router(api_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")

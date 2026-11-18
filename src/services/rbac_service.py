@@ -100,6 +100,10 @@ ROLE_MATRIX: dict[str, dict[str, object]] = {
 
 
 def ensure_rbac_seed(db: Session):
+    # Dependencies can check several permissions using the same request Session.
+    # Seed once per Session; role and permission decisions are still read normally.
+    if db.info.get("hydro_rbac_seeded"):
+        return
     permission_map: dict[str, Permission] = {}
     for permission_key, name, category in PERMISSIONS:
         permission = db.query(Permission).filter(Permission.permission_key == permission_key).first()
@@ -136,6 +140,7 @@ def ensure_rbac_seed(db: Session):
                 db.add(RolePermissionAssignment(role_id=role.id, permission_id=permission.id))
 
     db.commit()
+    db.info["hydro_rbac_seeded"] = True
 
 
 def list_roles(db: Session) -> list[Role]:

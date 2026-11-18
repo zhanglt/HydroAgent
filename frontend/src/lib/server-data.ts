@@ -30,13 +30,13 @@ async function getAuthToken() {
   return (await cookies()).get(AUTH_COOKIE_NAME)?.value || null
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
+export async function getDashboardData(includeWeather = true): Promise<DashboardData> {
   const authToken = await getAuthToken()
   try {
     const [status, sensors, weather, irrigation, decisionsPayload, zonesPayload, plansPayload] = await Promise.all([
       fetchBackendJson<SystemStatus>('/api/status', { authToken }),
       fetchBackendJson<SensorSnapshot>('/api/sensors/current', { authToken }),
-      fetchBackendJson<WeatherData>('/api/weather', { authToken }),
+      includeWeather ? fetchBackendJson<WeatherData>('/api/weather', { authToken }) : Promise.resolve(null),
       fetchBackendJson<IrrigationState>('/api/irrigation/status', { authToken }),
       fetchBackendJson<{ decisions: DecisionLog[] }>('/api/decisions?limit=5', { authToken }),
       fetchBackendJson<{ zones: Zone[] }>('/api/zones', { authToken }),

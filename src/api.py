@@ -8,13 +8,18 @@ import json
 import logging
 import uuid
 from urllib.parse import urlsplit
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel as PydanticModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
+from src.services.irrigation_service import get_sensor_summary, get_weather_summary
+from src.services.operations_service import get_operations_data
+from src.services.visualization_service import get_visualization_models, get_visualization_summary
+from src.services.rbac_service import get_user_permission_keys
 
 from src.database.models import (
     IrrigationLog,
@@ -47,6 +52,14 @@ from src.services import (
 
 logger = logging.getLogger("hydroagent.api")
 router = APIRouter()
+
+
+async def _prime_weather(db: Session, zone_id: str | None = None):
+    # Only plain location strings enter the worker; the request Session stays here.
+    locations = {zone.location for zone in list_zones(db) if zone_id is None or zone.zone_id == zone_id}
+    for location in locations:
+        await run_in_threadpool(get_weather_summary, location)
+
 
 CHAT_REQUEST_MODES = {"advisor", "planner", "operator"}
 
@@ -496,6 +509,7 @@ async def chat(req: ChatRequest, _: User = Depends(require_permission("chat:view
     resolved_mode = _resolve_chat_mode(req.mode, req.message, working_memory)
     db = SessionLocal()
     try:
+        await _prime_weather(db)
         farm_context = list_farm_context(db)
         direct_plan_reply = _build_direct_plan_reply(db, req.message, working_memory)
     finally:
@@ -940,7 +954,7 @@ async def zones(db: Session = Depends(get_db), _: User = Depends(require_permiss
 
 
 @router.get("/zones/{zone_id}/status")
-async def zone_status(zone_id: str, db: Session = Depends(get_db), _: User = Depends(require_permission("assets:view"))):
+def zone_status(zone_id: str, db: Session = Depends(get_db), _: User = Depends(require_permission("assets:view"))):
     try:
         return get_zone_status(db, zone_id)
     except ValueError as exc:
@@ -964,6 +978,7 @@ async def generate_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("plans:create")),
 ):
+    await _prime_weather(db, req.zone_id)
     try:
         result = generate_plan_result(
             db,
@@ -1069,6 +1084,9 @@ async def execute_plan_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("plans:execute")),
 ):
+    candidate = get_plan_by_id(db, plan_id)
+    if candidate:
+        await _prime_weather(db, candidate.zone_id)
     try:
         plan = execute_plan(db, plan_id, actor=req.actor)
     except ValueError as exc:
@@ -1099,42 +1117,73 @@ async def _record_plan_event_if_needed(event_type: str, plan: dict | None):
     await get_hydro_persistence().record_plan_event(conversation_id, payload)
 
 
+@router.get("/visualization")
+def visualization(
+    section: Literal["summary", "models"] = "summary",
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("dashboard:view")),
+):
+    permissions = get_user_permission_keys(db, user)
+    required = "operations:view" if section == "models" else "assets:view"
+    if required not in permissions:
+        raise HTTPException(status_code=403, detail=f"缺少权限: {required}")
+    if section == "models":
+        return get_visualization_models(db)
+    return get_visualization_summary(db, include_log="history:view" in permissions)
+
+
+@router.get("/operations")
+def operations(
+    section: Literal["all", "zones", "plans"] = "all",
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("operations:view")),
+    assets_user: User = Depends(require_permission("assets:view")),
+    dashboard_user: User = Depends(require_permission("dashboard:view")),
+):
+    return get_operations_data(db, section)
+
+
 @router.get("/sensors/current")
-async def get_current_sensors(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
+def get_current_sensors(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     zones_payload = []
     averages = {"soil_moisture": 0.0, "temperature": 0.0, "light_intensity": 0.0, "rainfall": 0.0}
     zones = list_zones(db)
     for zone in zones:
-        status = get_zone_status(db, zone.zone_id)
-        average = status["sensor_summary"].get("average", {})
-        zones_payload.append({"zone_id": zone.zone_id, "zone_name": zone.name, **average})
+        summary = get_sensor_summary(db, zone)
+        average = summary.get("average", {})
+        zones_payload.append({"zone_id": zone.zone_id, "zone_name": zone.name,
+                              "status": summary["status"], "collected_at": summary.get("timestamp"), **average})
         for key in averages:
             averages[key] += float(average.get(key, 0.0) or 0.0)
 
-    divisor = max(len(zones_payload), 1)
+    valid_count = sum(row["status"] == "ok" for row in zones_payload)
     return {
         "timestamp": datetime.datetime.now().isoformat(),
         "sensors": zones_payload,
-        "average": {key: round(value / divisor, 2) for key, value in averages.items()},
+        "average": {key: round(value / valid_count, 2) if valid_count else None for key, value in averages.items()},
     }
 
 
 @router.get("/weather")
-async def get_weather(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
+def get_weather(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard:view"))):
     zones = list_zones(db)
+    if not zones:
+        raise HTTPException(status_code=503, detail="暂无分区天气")
     zone = zones[0]
-    status = get_zone_status(db, zone.zone_id)
-    weather_summary = status["weather_summary"]
+    weather_summary = get_weather_summary(zone.location)
+    first_day = next(iter(weather_summary.get("forecast_days", [])), {})
     return {
         "city": weather_summary.get("city", zone.location),
         "live": {
-            "weather": weather_summary.get("forecast_days", [{}])[0].get("day_weather", "--"),
-            "temperature": weather_summary.get("forecast_days", [{}])[0].get("day_temp", "--"),
+            "weather": first_day.get("day_weather", "--"),
+            "temperature": first_day.get("day_temp", "--"),
             "wind_direction": "--",
             "wind_power": "--",
         },
         "forecast": weather_summary.get("forecast_days", []),
         "note": weather_summary.get("source", "mock"),
+        "status": weather_summary.get("status", "unavailable"),
+        "collected_at": weather_summary.get("collected_at"),
     }
 
 
@@ -1144,7 +1193,7 @@ async def get_irrigation_status(db: Session = Depends(get_db), _: User = Depends
 
 
 @router.post("/irrigation/control")
-async def control_irrigation(
+def control_irrigation(
     req: IrrigationControlRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("plans:execute")),

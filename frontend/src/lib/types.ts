@@ -10,10 +10,10 @@ export type SystemStatus = {
 export type UiTone = 'default' | 'success' | 'warning' | 'danger'
 
 export type SensorAverage = {
-  soil_moisture: number
-  temperature: number
-  light_intensity: number
-  rainfall: number
+  soil_moisture: number | null
+  temperature: number | null
+  light_intensity: number | null
+  rainfall: number | null
 }
 
 export type SensorSnapshot = {
@@ -23,6 +23,8 @@ export type SensorSnapshot = {
 }
 
 export type WeatherData = {
+  status?: 'ok' | 'stale' | 'unavailable'
+  collected_at?: string | null
   city: string
   live: {
     weather: string
@@ -443,6 +445,24 @@ export type HistoryData = {
   audits?: AuditEvent[]
 }
 
+export type OperationsZones = {
+  zones?: Zone[]
+  sensor_summaries?: Array<{
+    zone_id: string
+    average: Partial<SensorAverage>
+    status: string
+    collected_at?: string | null
+  }>
+  errors: { zones?: string; plans?: string }
+}
+
+export type OperationsPlans = {
+  active_plans?: IrrigationPlan[]
+  errors: { zones?: string; plans?: string }
+}
+
+export type OperationsData = OperationsZones & OperationsPlans
+
 export type AlertEvent = {
   alert_id: string
   rule_key?: string | null
@@ -500,8 +520,8 @@ export type AnalyticsOverview = {
   zone_health: Array<{
     zone_id: string
     zone_name: string
-    soil_moisture: number
-    deficit: number
+    soil_moisture: number | null
+    deficit: number | null
     actuator_status: string
     alert_count: number
   }>
@@ -512,9 +532,25 @@ export type ZoneTrendSeries = {
   zone_name: string
   range: string
   labels: string[]
-  soil_moisture: number[]
+  soil_moisture: Array<number | null>
   threshold: number[]
 }
+
+export type VisualizationSummary = {
+  timestamp: string
+  version: string
+  average_soil_moisture: number | null
+  city: string | null
+  zone_count: number
+  running_actuator_count: number
+  irrigation_status: string
+  plan_count: number
+  pending_plan_count: number
+  active_alert_count: number
+  last_irrigation_at: string | null
+}
+
+export type VisualizationModelPlan = Pick<IrrigationPlan, 'plan_id' | 'zone_id' | 'zone_name' | 'created_at' | 'evidence_summary'>
 
 export type ReportExportTask = {
   id: string

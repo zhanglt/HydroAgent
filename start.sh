@@ -109,7 +109,7 @@ prepare_backend_env() {
   # 统一使用虚拟环境内的 Python，避免系统 Python 和依赖版本漂移。
   if [ "${INSTALL_BACKEND_DEPS}" = "always" ] || { [ "${INSTALL_BACKEND_DEPS}" = "auto" ] && [ ! -x ".venv/bin/uvicorn" ]; }; then
     log "Installing backend dependencies"
-    ./.venv/bin/python -m pip install -r requirements.txt
+    ./.venv/bin/python -m pip install --proxy  http://10.0.0.8:30000 -r requirements.txt
   fi
 }
 

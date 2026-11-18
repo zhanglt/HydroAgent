@@ -248,6 +248,13 @@ python -m unittest discover -s tests
 python -m unittest tests.test_zone_planning
 ```
 
+## 性能分析与优化计划
+
+- [2026-11-18 完整更新记录](docs/update-record-2026-11-18.md)：汇总页面、接口、安全、构建代理、验证边界及部署回退步骤。
+- [总览、调度与大屏性能分析](docs/performance-analysis.md)：记录页面切换耗时、接口实测、源码调用链和诊断边界。
+- [总览、调度与大屏性能优化计划](docs/performance-optimization-plan.md)：列出分阶段优化、接口调整、安全约束和验收目标。
+- [总览、调度与大屏优化实施记录](docs/performance-optimization-results.md)：记录已实施变更、隔离生产构建实测、测试结果和验证限制；第 5 节包含数据大屏优化。
+
 ## 安全说明
 
 - 不要将真实 API Key、数据库密码或认证密钥提交到仓库。

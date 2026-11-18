@@ -5,6 +5,7 @@ import { getSessionUser } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { LogoutButton } from '@/components/logout-button'
 import { SectionBadge } from '@/components/ui/section-badge'
+import { ShellNavLink } from '@/components/shell-nav-link'
 
 type NavGroup = 'primary' | 'secondary'
 
@@ -60,11 +61,9 @@ function BrandBlock({ compact = false }: { compact?: boolean }) {
 
 function ShellNav({
   items,
-  currentPath,
   title,
 }: {
   items: NavItem[]
-  currentPath: string
   title: string
 }) {
   if (items.length === 0) {
@@ -77,14 +76,13 @@ function ShellNav({
       <nav className="shell-nav-list">
         {items.map((item) => {
           const Icon = item.icon
-          const active = currentPath === item.href
           return (
-            <Link key={item.href} href={item.href} className={cn('shell-nav-link', active && 'is-active')}>
+            <ShellNavLink key={item.href} href={item.href}>
               <span className="shell-nav-link-main">
                 <Icon size={14} />
                 <span>{item.label}</span>
               </span>
-            </Link>
+            </ShellNavLink>
           )
         })}
       </nav>
@@ -93,12 +91,10 @@ function ShellNav({
 }
 
 function ShellSidebar({
-  currentPath,
   navigation,
   user,
   compact = false,
 }: {
-  currentPath: string
   navigation: ReturnType<typeof buildNavigationModel>
   user: Awaited<ReturnType<typeof getSessionUser>>
   compact?: boolean
@@ -113,8 +109,8 @@ function ShellSidebar({
         </div>
 
         <div className="shell-sidebar-navstack">
-          <ShellNav items={navigation.primaryItems} currentPath={currentPath} title="核心工作台" />
-          <ShellNav items={navigation.secondaryItems} currentPath={currentPath} title="系统配置" />
+          <ShellNav items={navigation.primaryItems} title="核心工作台" />
+          <ShellNav items={navigation.secondaryItems} title="系统配置" />
         </div>
 
         <div className="shell-sidebar-usercard">
@@ -135,7 +131,7 @@ export async function AppShell({ children, currentPath }: { children: React.Reac
 
   return (
     <div className="app-frame app-shell-layout">
-      <ShellSidebar currentPath={currentPath} navigation={navigation} user={user} />
+      <ShellSidebar navigation={navigation} user={user} />
       <main className="page-panel shell-page-panel">{children}</main>
     </div>
   )
@@ -147,7 +143,7 @@ export async function ChatShell({ children, currentPath }: { children: React.Rea
 
   return (
     <div className="chat-app-shell app-shell-layout">
-      <ShellSidebar currentPath={currentPath} navigation={navigation} user={user} compact />
+      <ShellSidebar navigation={navigation} user={user} compact />
       <main className="chat-app-main shell-page-panel flex flex-1 flex-col min-h-0 overflow-hidden p-0 px-0 py-0">{children}</main>
     </div>
   )

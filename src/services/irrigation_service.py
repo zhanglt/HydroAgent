@@ -9,6 +9,9 @@ import json
 import logging
 import os
 import uuid
+import math
+import time
+from concurrent.futures import Future
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -43,6 +46,8 @@ logger = logging.getLogger("hydroagent.service")
 
 WORKSPACE_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", ".hydro_workspace")
 EVIDENCE_CACHE_TTL_SECONDS = 5
+WEATHER_CACHE_TTL_SECONDS = 600
+WEATHER_RETRY_SECONDS = 5
 OPEN_PLAN_STATUSES = ("pending_approval", "approved", "executing")
 RUNNING_PLAN_STATUSES = {"executing"}
 FINISHED_EXECUTION_STATUSES = {"running", "stopped", "completed", "executed"}
@@ -51,6 +56,7 @@ MIN_MOISTURE_STOP_PROTECTION_SECONDS = 60
 _sensor_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
 _weather_summary_cache: dict[str, tuple[dt.datetime, dict[str, Any]]] = {}
 _cache_lock = Lock()
+_weather_inflight: dict[str, Future] = {}
 
 
 @dataclass
@@ -204,6 +210,14 @@ def get_zone_status(db: Session, zone_id: str) -> dict[str, Any]:
         "actuator": evidence.actuator.to_dict() if evidence.actuator else None,
         "pending_plan": pending_plan.to_dict() if pending_plan else None,
     }
+
+
+def get_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
+    return _collect_zone_sensor_summary(db, zone)
+
+
+def get_weather_summary(location: str) -> dict[str, Any]:
+    return _get_weather_summary(location)
 
 
 def list_farm_context(db: Session) -> list[dict[str, Any]]:
@@ -587,6 +601,18 @@ def execute_plan(db: Session, plan_id: str, actor: str = "system") -> Irrigation
     actuator = plan.actuator
     if not actuator or not actuator.is_enabled:
         raise ValueError("Actuator unavailable")
+    if actuator.status not in {"idle", "ready", "stopped"}:
+        raise ValueError("Actuator state does not allow execution")
+    if not plan.zone or not plan.zone.is_enabled:
+        raise ValueError("Zone unavailable")
+    evidence = collect_zone_evidence(db, plan.zone)
+    if evidence.sensor_summary.get("status") != "ok":
+        raise ValueError("Valid sensor evidence is required")
+    if evidence.weather_summary.get("status") != "ok":
+        raise ValueError("Fresh weather evidence is required")
+    moisture = evidence.sensor_summary["average"]["soil_moisture"]
+    if evidence.weather_summary.get("rain_expected") and moisture >= max(0, _resolve_zone_threshold(db, plan.zone) - 15):
+        raise ValueError("Rain expected within 48 hours")
 
     now = dt.datetime.utcnow()
     actuator.status = "running"
@@ -1009,6 +1035,13 @@ def _collect_zone_sensor_summary(db: Session, zone: Zone) -> dict[str, Any]:
     for sensor_id in sensor_ids:
         try:
             data = DataCollectionModule([sensor_id]).get_data()
+            values = data.get("data", {})
+            for metric in ("soil_moisture", "temperature", "light_intensity", "rainfall"):
+                value = values.get(metric)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError(f"Invalid sensor metric: {metric}")
+            if not 0 <= values["soil_moisture"] <= 100:
+                raise ValueError("Soil moisture outside 0..100")
             _stabilize_running_mock_reading(db, zone, sensor_id, data.get("data", {}))
             raw_reading = dict(data)
             raw_reading.setdefault("sensor_id", sensor_id)
@@ -1096,20 +1129,30 @@ def _store_sensor_history(db: Session, raw_readings: list[dict[str, Any]]) -> No
 
 
 def _get_weather_summary(location: str) -> dict[str, Any]:
-    cached = _read_cached_payload(_weather_summary_cache, location)
-    if cached:
-        return dict(cached)
+    started = time.perf_counter()
+    with _cache_lock:
+        cached = _weather_summary_cache.get(location)
+        if cached:
+            cached_at, payload = cached
+            ttl = WEATHER_CACHE_TTL_SECONDS if payload.get("status") == "ok" else WEATHER_RETRY_SECONDS
+            if (dt.datetime.utcnow() - cached_at).total_seconds() < ttl:
+                return dict(payload)
+        pending = _weather_inflight.get(location)
+        leader = pending is None
+        if leader:
+            pending = Future()
+            _weather_inflight[location] = pending
+    if not leader:
+        return dict(pending.result())
 
-    default_summary = {
-        "city": location,
-        "forecast_days": [],
-        "rain_expected": False,
-        "source": "mock",
-    }
     try:
         payload = DataProcessingModule().get_weather_by_city_name(location)
         casts = payload.get("forecast", [])
-        if casts:
+        if casts and all(
+            isinstance(item, dict) and isinstance(item.get("dayweather"), str)
+            and item["dayweather"].strip() not in {"", "--", "未知"}
+            for item in casts[:4]
+        ):
             forecast_days = [
                 {
                     "date": item.get("date"),
@@ -1124,26 +1167,34 @@ def _get_weather_summary(location: str) -> dict[str, Any]:
                 "forecast_days": forecast_days,
                 "rain_expected": any("雨" in (item.get("day_weather") or "") for item in forecast_days[:2]),
                 "source": "open-meteo",
+                "status": "ok",
+                "collected_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             }
-            _write_cached_payload(_weather_summary_cache, location, payload)
-            return payload
+        else:
+            raise ValueError("Weather forecast is empty or invalid")
     except Exception as exc:
         logger.warning("Weather lookup failed for %s: %s", location, exc)
-
-    now = dt.date.today()
-    forecast_days = [
-        {
-            "date": (now + dt.timedelta(days=index)).isoformat(),
-            "day_weather": weather,
-            "day_temp": str(24 + index),
-            "night_temp": str(16 + index),
+        payload = {
+            **(cached[1] if cached else {}),
+            "city": location,
+            "forecast_days": cached[1].get("forecast_days", []) if cached else [],
+            "rain_expected": None,
+            "source": cached[1].get("source", "unavailable") if cached else "unavailable",
+            "status": "stale" if cached and cached[1].get("collected_at") else "unavailable",
+            "collected_at": cached[1].get("collected_at") if cached else None,
         }
-        for index, weather in enumerate(["多云", "晴", "小雨", "多云"])
-    ]
-    default_summary["forecast_days"] = forecast_days
-    default_summary["rain_expected"] = any("雨" in (item.get("day_weather") or "") for item in forecast_days[:2])
-    _write_cached_payload(_weather_summary_cache, location, default_summary)
-    return default_summary
+    except BaseException as exc:
+        pending.set_exception(exc)
+        with _cache_lock:
+            _weather_inflight.pop(location, None)
+        raise
+
+    _write_cached_payload(_weather_summary_cache, location, payload)
+    pending.set_result(payload)
+    with _cache_lock:
+        _weather_inflight.pop(location, None)
+    logger.info("weather_lookup duration_ms=%.1f status=%s", (time.perf_counter() - started) * 1000, payload["status"])
+    return dict(payload)
 
 
 def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
@@ -1163,6 +1214,8 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
     risk_factors: list[str] = []
     if evidence.sensor_summary.get("status") != "ok":
         blockers.append("传感器数据缺失")
+    if evidence.weather_summary.get("status") in {"stale", "unavailable"}:
+        blockers.append("天气证据过期或不可用")
     if rainfall_expected:
         risk_factors.append("未来 48 小时存在降雨信号")
     if not actuator:
@@ -1170,7 +1223,9 @@ def _build_plan_payload(evidence: ZoneEvidence) -> dict[str, Any]:
     elif not actuator.is_enabled:
         blockers.append("执行器已禁用")
     elif actuator.status == "running":
-        risk_factors.append("执行器当前已在运行")
+        blockers.append("执行器当前已在运行")
+    elif actuator.status not in {"idle", "ready", "stopped"}:
+        blockers.append("执行器状态未知或不可用")
     if ml_prediction.get("fallback_used"):
         risk_factors.append("ML 预测历史样本不足，仅作为低置信度证据")
     elif prediction_usable and predicted_moisture < threshold:
