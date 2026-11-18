@@ -78,8 +78,10 @@ cp config.template.yaml config.yaml
 ```yaml
 openai_api_key: sk-xxx-your-openai-key
 openai_base_url: https://your-openai-base-url/v1
+openai_wire_api: auto
 model_name: gpt-4o
 embedding_model_name: text-embedding-3-small
+embedding_base_url: ""  # 单独指定向量服务地址，留空复用 openai_base_url
 
 apis:
   weather_service_url: "https://api.open-meteo.com/v1/forecast"
@@ -89,10 +91,29 @@ apis:
 
 - `openai_api_key`：LLM 与知识库能力使用的 API Key。
 - `openai_base_url`：OpenAI 兼容接口地址。
+- `openai_wire_api`：聊天协议，支持 `auto`（默认）、`responses`、`chat_completions`。设置页“聊天 API 协议”可修改并热重载；不影响 Embeddings 接口。
 - `model_name`：智能体对话和计划生成使用的模型。
 - `embedding_model_name`：知识库向量化使用的模型。
+- `embedding_base_url`：独立的向量服务基础 URL；未配置或留空时复用 `openai_base_url`。设置页“知识引擎”可修改，Embeddings 模型列表也使用该地址和对应的向量 API Key。
 - `apis.weather_service_url`：天气预报服务地址。
+- `proxy`：`api.open-meteo.com` 天气预报请求使用的代理，例如 `http://10.0.0.8:30000`；未配置或为空时沿用 Requests 的默认网络行为。此配置不修改聊天、Embeddings、自定义天气地址或地理编码请求的代理。
 - `database`：数据库配置；未配置时使用本地 SQLite。
+
+Open-Meteo 直连超时的环境，可在 `config.yaml` 顶层配置并重启后端：
+
+```yaml
+proxy: http://10.0.0.8:30000
+```
+
+如果第三方服务在 Codex 中配置 `wire_api = "responses"`，本项目对应配置为：
+
+```yaml
+openai_base_url: https://api.1813051106.xyz/openai
+openai_wire_api: responses
+model_name: gpt-6.1-sol
+```
+
+`openai_base_url` 保留服务商给出的基础地址，不追加 `/responses`；SDK 根据协议追加路径。Responses 模式使用流式请求，并将系统指令的出站角色映射为 `developer`，兼容拒绝 `system` 角色的网关。Chat Completions 模式继续保留原消息格式与 DeepSeek 推理字段。故障原因和验证见[第三方 Responses 400 修复记录](docs/fix-responses-gateway-400.md)。
 
 生产或多人环境建议在 `config.yaml` 中直接配置 API Key，也可通过环境变量覆盖：
 
@@ -251,6 +272,9 @@ python -m unittest tests.test_zone_planning
 ## 性能分析与优化计划
 
 - [2026-11-18 完整更新记录](docs/update-record-2026-11-18.md)：汇总页面、接口、安全、构建代理、验证边界及部署回退步骤。
+- [登录接口 404 与 HTML 错误修复](docs/fix-login-route-404.md)：记录路由故障现场、错误提示、启动检查及实际登录验证。
+- [Open-Meteo 天气代理](docs/fix-weather-proxy.md)：配置顶层 `proxy`，仅用于天气预报目标主机。
+- [Embedding 独立地址](docs/embedding-endpoint-configuration.md)：独立 URL、Key、模型列表与回退规则。
 - [总览、调度与大屏性能分析](docs/performance-analysis.md)：记录页面切换耗时、接口实测、源码调用链和诊断边界。
 - [总览、调度与大屏性能优化计划](docs/performance-optimization-plan.md)：列出分阶段优化、接口调整、安全约束和验收目标。
 - [总览、调度与大屏优化实施记录](docs/performance-optimization-results.md)：记录已实施变更、隔离生产构建实测、测试结果和验证限制；第 5 节包含数据大屏优化。

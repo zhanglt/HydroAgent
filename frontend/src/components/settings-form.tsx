@@ -174,7 +174,9 @@ export function SettingsForm({
         body: JSON.stringify({
           model_name: settings.model_name,
           embedding_model_name: settings.embedding_model_name,
+          embedding_base_url: settings.embedding_base_url ?? '',
           openai_base_url: settings.openai_base_url,
+          openai_wire_api: settings.openai_wire_api,
           knowledge_top_k: settings.knowledge_top_k,
           knowledge_chunk_size: settings.knowledge_chunk_size,
           knowledge_chunk_overlap: settings.knowledge_chunk_overlap,
@@ -349,7 +351,7 @@ export function SettingsForm({
             <SettingsItem
               label="推理 Endpoint"
               path="openai_base_url"
-              detail="用于 Chat 与 Embeddings 的 OpenAI 兼容 API 地址。"
+              detail="聊天 API 地址；Embeddings 未单独配置地址时也使用此地址。"
               control={
                 <Input
                   className={compactInputClass}
@@ -357,6 +359,22 @@ export function SettingsForm({
                   onChange={(event) => update('openai_base_url', event.target.value)}
                   placeholder="例如 https://api.openai.com/v1"
                 />
+              }
+            />
+            <SettingsItem
+              label="聊天 API 协议"
+              path="openai_wire_api"
+              detail="按服务商要求选择；与 Codex wire_api=responses 对应时选择 Responses。向量接口不受此项影响。"
+              control={
+                <select
+                  className={compactInputClass}
+                  value={settings.openai_wire_api || 'auto'}
+                  onChange={(event) => update('openai_wire_api', event.target.value as RuntimeSettings['openai_wire_api'])}
+                >
+                  <option value="auto">自动选择</option>
+                  <option value="responses">Responses</option>
+                  <option value="chat_completions">Chat Completions</option>
+                </select>
               }
             />
             <ReadonlyItem
@@ -402,6 +420,19 @@ export function SettingsForm({
                     </Button>
                   </InlineActions>
                 </ControlStack>
+              }
+            />
+            <SettingsItem
+              label="Embeddings Endpoint"
+              path="embedding_base_url"
+              detail="独立向量服务基础地址，留空时使用聊天 Endpoint；保存后用于向量请求与模型列表。"
+              control={
+                <Input
+                  className={compactInputClass}
+                  value={settings.embedding_base_url || ''}
+                  onChange={(event) => update('embedding_base_url', event.target.value)}
+                  placeholder="例如 https://your-embedding-provider/v1"
+                />
               }
             />
             <ReadonlyItem
@@ -663,6 +694,7 @@ export function SettingsForm({
     <div className="flex min-h-full w-full flex-col gap-6 bg-white lg:flex-row">
       <ModelPickerDrawer
         open={modelDrawerTarget !== null}
+        target={modelDrawerTarget === 'embedding' ? 'embedding' : 'chat'}
         title={modelDrawerTarget === 'embedding' ? '选择 Embeddings 模型' : '选择聊天模型'}
         selectedModel={modelDrawerTarget === 'embedding' ? settings.embedding_model_name : settings.model_name}
         onClose={() => setModelDrawerTarget(null)}

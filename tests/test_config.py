@@ -134,5 +134,50 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(os.environ["EMBEDDING_MODEL_NAME"], "yaml-embedding-model")
         self.assertEqual(os.environ["OPENAI_BASE_URL"], "https://yaml.example.com/v1")
 
+    def test_wire_api_roundtrip_preserves_other_configuration(self):
+        config = Config(config_file_path=self.config_file.name)
+        self.assertEqual(config.OPENAI_WIRE_API, "auto")
+        before = dict(config._config_from_yaml)
+        snapshot = config.update_yaml_settings({"openai_wire_api": "responses"})
+        self.assertEqual(snapshot["openai_wire_api"], "responses")
+        loaded = Config(config_file_path=self.config_file.name)
+        self.assertEqual(loaded.OPENAI_WIRE_API, "responses")
+        self.assertEqual({k: v for k, v in loaded._config_from_yaml.items() if k != "openai_wire_api"}, before)
+
+    def test_invalid_wire_api_is_rejected_before_writing(self):
+        config = Config(config_file_path=self.config_file.name)
+        with open(self.config_file.name) as source:
+            before = source.read()
+        with self.assertRaises(ValueError):
+            config.update_yaml_settings({"openai_wire_api": "invalid", "model_name": "changed"})
+        with open(self.config_file.name) as source:
+            self.assertEqual(source.read(), before)
+
+    def test_weather_proxy_loads_from_yaml_and_defaults_to_empty(self):
+        self.assertEqual(Config(config_file_path=self.config_file.name).PROXY, "")
+        with open(self.config_file.name) as source:
+            payload = yaml.safe_load(source)
+        payload["proxy"] = "http://10.0.0.8:30000"
+        with open(self.config_file.name, "w") as target:
+            yaml.safe_dump(payload, target)
+        self.assertEqual(Config(config_file_path=self.config_file.name).PROXY, payload["proxy"])
+
+    def test_embedding_url_roundtrip_and_fallback(self):
+        config = Config(config_file_path=self.config_file.name)
+        self.assertIsNone(config.EMBEDDING_BASE_URL)
+        self.assertEqual(os.environ["EMBEDDING_BASE_URL"], config.OPENAI_BASE_URL)
+        original_chat = config.OPENAI_BASE_URL
+        snapshot = config.update_yaml_settings({"embedding_base_url": "https://embedding.example/v1"})
+        self.assertEqual(snapshot["embedding_base_url"], "https://embedding.example/v1")
+        self.assertEqual(config.OPENAI_BASE_URL, original_chat)
+        loaded = Config(config_file_path=self.config_file.name)
+        self.assertEqual(loaded.EMBEDDING_BASE_URL, "https://embedding.example/v1")
+        self.assertEqual(os.environ["EMBEDDING_BASE_URL"], loaded.EMBEDDING_BASE_URL)
+        loaded.update_yaml_settings({"openai_base_url": "https://new-chat.example/v1"})
+        self.assertEqual(loaded.EMBEDDING_BASE_URL, "https://embedding.example/v1")
+        loaded.update_yaml_settings({"embedding_base_url": ""})
+        self.assertIsNone(loaded.EMBEDDING_BASE_URL)
+        self.assertEqual(os.environ["EMBEDDING_BASE_URL"], "https://new-chat.example/v1")
+
 if __name__ == "__main__":
     unittest.main()

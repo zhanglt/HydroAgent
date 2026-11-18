@@ -257,7 +257,7 @@ class KnowledgeBaseService:
         except ModuleNotFoundError as exc:
             raise KnowledgeBaseError("缺少 openai 依赖，请先安装 requirements.txt。") from exc
 
-        client = OpenAI(api_key=api_key, base_url=config.OPENAI_BASE_URL)
+        client = OpenAI(api_key=api_key, base_url=config.EMBEDDING_BASE_URL or config.OPENAI_BASE_URL)
         vectors: list[list[float]] = []
         for start in range(0, len(texts), 32):
             batch = texts[start:start + 32]

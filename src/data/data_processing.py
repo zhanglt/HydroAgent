@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 import requests
 
@@ -93,6 +94,12 @@ class DataProcessingModule:
         self._custom_api_url = bool(api_url and api_url.strip())
         configured_url = api_url or config.API_SERVICE_URL or self.OPEN_METEO_FORECAST_URL
         self.weather_api_url = self._resolve_weather_api_url(configured_url)
+        # Scope the configured proxy to Open-Meteo forecasts, not other APIs.
+        self.weather_proxies = (
+            {"http": config.PROXY, "https": config.PROXY}
+            if config.PROXY and urlsplit(self.weather_api_url).hostname == "api.open-meteo.com"
+            else None
+        )
         logger.info("DataProcessingModule initialized.")
 
     def process_sensor_data(self, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -234,6 +241,7 @@ class DataProcessingModule:
                     "timezone": "auto",
                 },
                 timeout=10,
+                proxies=self.weather_proxies,
             )
             response.raise_for_status()
             return response.json()

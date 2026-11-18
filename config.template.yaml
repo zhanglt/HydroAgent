@@ -1,9 +1,14 @@
 # config.template.yaml 示例
 
+# Optional proxy used only for api.open-meteo.com forecast requests.
+proxy: ""
+
 openai_api_key: sk-xxx-your-openai-key
 openai_base_url: https://your-openai-base-url/v1
+openai_wire_api: auto  # auto | responses | chat_completions; Codex wire_api=responses uses responses
 model_name: gpt-4o  # 指定用于LangChain智能体的模型名
 embedding_model_name: text-embedding-3-small  # 指定知识库 embeddings 模型
+embedding_base_url: ""  # Optional independent embeddings URL; empty uses openai_base_url.
 # embedding_api_key: sk-xxx-your-embeddings-key  # 可选；未配置时回退到 openai_api_key
 
 knowledge_base:

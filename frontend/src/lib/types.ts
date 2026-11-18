@@ -201,7 +201,9 @@ export type RuntimeSettings = {
   alarm_enabled: boolean
   model_name?: string
   embedding_model_name?: string
+  embedding_base_url?: string | null
   openai_base_url?: string | null
+  openai_wire_api?: 'auto' | 'responses' | 'chat_completions'
   knowledge_top_k?: number
   knowledge_chunk_size?: number
   knowledge_chunk_overlap?: number
@@ -213,7 +215,9 @@ export type RuntimeSettings = {
   yaml_settings?: {
     model_name?: string
     embedding_model_name?: string
+    embedding_base_url?: string | null
     openai_base_url?: string | null
+    openai_wire_api?: 'auto' | 'responses' | 'chat_completions'
     openai_api_key_status?: SecretStatus
     embedding_api_key_status?: SecretStatus
     db_type?: string

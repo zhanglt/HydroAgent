@@ -44,6 +44,7 @@ class Config:
         self.WEATHER_API_KEY = os.getenv("WEATHER_API_KEY") or self._get_from_yaml("apis.weather_api_key", "")
         self.API_SERVICE_URL = os.getenv("API_SERVICE_URL") or self._get_from_yaml(
             "apis.weather_service_url", "https://api.open-meteo.com/v1/forecast")
+        self.PROXY = str(self._config_from_yaml.get("proxy") or "").strip()
         
         # 传感器配置
         self.SENSOR_IDS = os.getenv("SENSOR_IDS") and os.getenv("SENSOR_IDS").split(",") or self._get_from_yaml("sensors.ids", ["sensor_001", "sensor_002"])
@@ -90,6 +91,10 @@ class Config:
             self._config_from_yaml.get('openai_base_url')
             or "https://api.openai.com/v1"
         )
+        self.OPENAI_WIRE_API = self._validate_openai_wire_api(
+            self._config_from_yaml.get("openai_wire_api", "auto")
+        )
+        self.EMBEDDING_BASE_URL = str(self._config_from_yaml.get("embedding_base_url") or "").strip() or None
         self.EMBEDDING_API_KEY = self._resolve_secret(
             env_key='EMBEDDING_API_KEY',
             yaml_key='embedding_api_key',
@@ -188,6 +193,7 @@ class Config:
         env_mapping = {
             "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "EMBEDDING_API_KEY": self.EMBEDDING_API_KEY,
+            "EMBEDDING_BASE_URL": self.EMBEDDING_BASE_URL or self.OPENAI_BASE_URL,
             "OPENAI_BASE_URL": self.OPENAI_BASE_URL,
             "MODEL_NAME": self.MODEL_NAME,
             "EMBEDDING_MODEL_NAME": self.EMBEDDING_MODEL_NAME,
@@ -204,7 +210,9 @@ class Config:
         return {
             "model_name": self.MODEL_NAME,
             "embedding_model_name": self.EMBEDDING_MODEL_NAME,
+            "embedding_base_url": self.EMBEDDING_BASE_URL,
             "openai_base_url": self.OPENAI_BASE_URL,
+            "openai_wire_api": self.OPENAI_WIRE_API,
             "openai_api_key_status": self._serialize_secret_status(self.OPENAI_API_KEY),
             "embedding_api_key_status": self._serialize_secret_status(self.EMBEDDING_API_KEY),
             "db_type": self.DB_TYPE,
@@ -217,10 +225,14 @@ class Config:
 
     def update_yaml_settings(self, updates):
         """将前端结构化设置映射回 config.yaml，并同步刷新运行时配置。"""
+        if updates.get("openai_wire_api") is not None:
+            self._validate_openai_wire_api(updates["openai_wire_api"])
         mapping = {
             "model_name": ("model_name", str),
             "embedding_model_name": ("embedding_model_name", str),
+            "embedding_base_url": ("embedding_base_url", str),
             "openai_base_url": ("openai_base_url", str),
+            "openai_wire_api": ("openai_wire_api", str),
         }
 
         for key, value in updates.items():
@@ -248,11 +260,21 @@ class Config:
             self.MODEL_NAME = str(updates["model_name"])
         if "embedding_model_name" in updates and updates["embedding_model_name"] is not None:
             self.EMBEDDING_MODEL_NAME = str(updates["embedding_model_name"])
+        if "embedding_base_url" in updates:
+            self.EMBEDDING_BASE_URL = str(updates["embedding_base_url"] or "").strip() or None
         if "openai_base_url" in updates:
             self.OPENAI_BASE_URL = str(updates["openai_base_url"] or "").strip() or None
+        if updates.get("openai_wire_api") is not None:
+            self.OPENAI_WIRE_API = updates["openai_wire_api"]
         self.sync_yaml_to_environment()
 
         return self.get_yaml_settings()
+
+    @staticmethod
+    def _validate_openai_wire_api(value):
+        if value not in {"auto", "responses", "chat_completions"}:
+            raise ValueError("openai_wire_api must be auto, responses, or chat_completions")
+        return value
 
     def update_runtime_settings(self, updates):
         """兼容旧调用；现仅更新 YAML 托管字段。"""

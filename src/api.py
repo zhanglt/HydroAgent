@@ -149,8 +149,10 @@ def _should_reload_agent(updates: dict) -> bool:
     reload_keys = {
         "model_name",
         "openai_base_url",
+        "openai_wire_api",
         "openai_api_key",
         "embedding_model_name",
+        "embedding_base_url",
         "embedding_api_key",
     }
     return any(key in updates for key in reload_keys)
@@ -212,7 +214,9 @@ class SettingsUpdateRequest(PydanticModel):
     collection_interval_minutes: Optional[int] = None
     model_name: Optional[str] = None
     embedding_model_name: Optional[str] = None
+    embedding_base_url: Optional[str] = None
     openai_base_url: Optional[str] = None
+    openai_wire_api: Optional[Literal["auto", "responses", "chat_completions"]] = None
     openai_api_key: Optional[str] = None
     embedding_api_key: Optional[str] = None
     knowledge_top_k: Optional[int] = None
@@ -1268,7 +1272,9 @@ async def update_settings(
     yaml_update_keys = {
         "model_name",
         "embedding_model_name",
+        "embedding_base_url",
         "openai_base_url",
+        "openai_wire_api",
         "openai_api_key",
         "embedding_api_key",
     }
@@ -1311,16 +1317,18 @@ async def update_settings(
 @router.get("/settings/openai-models")
 async def list_openai_models(
     model_id: Optional[str] = None,
+    target: Literal["chat", "embedding"] = "chat",
     _: User = Depends(require_permission("settings:view")),
 ):
     from src.config import config
     import requests
 
-    api_key = config.OPENAI_API_KEY
+    api_key = (config.EMBEDDING_API_KEY or config.OPENAI_API_KEY) if target == "embedding" else config.OPENAI_API_KEY
     if not api_key:
         raise HTTPException(status_code=400, detail="尚未配置 OpenAI API Key。请先在系统设置中保存 key。")
 
-    request_url = _resolve_models_url(config.OPENAI_BASE_URL, model_id=model_id)
+    base_url = (config.EMBEDDING_BASE_URL or config.OPENAI_BASE_URL) if target == "embedding" else config.OPENAI_BASE_URL
+    request_url = _resolve_models_url(base_url, model_id=model_id)
     try:
         response = requests.get(
             request_url,

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from src.data.data_processing import DataProcessingModule
 from src.exceptions.exceptions import WeatherAPIError
+from src.config import config
 
 
 class TestWeatherAPI(unittest.TestCase):
@@ -15,6 +16,35 @@ class TestWeatherAPI(unittest.TestCase):
     def test_city_to_code(self):
         self.assertEqual(self.processing_module.city_to_code("北京"), "110000")
         self.assertEqual(self.processing_module.city_to_code("未知城市"), "110000")
+
+    @patch("src.data.data_processing.requests.get")
+    def test_configured_proxy_is_used_for_open_meteo_forecast(self, mock_get):
+        mock_get.return_value.json.return_value = {}
+        with patch.object(config, "PROXY", "http://10.0.0.8:30000"):
+            module = DataProcessingModule(api_url="https://api.open-meteo.com/v1/forecast")
+            module.get_weather_by_city_name("北京")
+        self.assertEqual(mock_get.call_args.kwargs["proxies"], {
+            "http": "http://10.0.0.8:30000", "https": "http://10.0.0.8:30000",
+        })
+
+    @patch("src.data.data_processing.requests.get")
+    def test_proxy_does_not_apply_to_other_hosts_or_geocoding(self, mock_get):
+        mock_get.return_value.json.return_value = {}
+        with patch.object(config, "PROXY", "http://10.0.0.8:30000"):
+            module = DataProcessingModule(api_url="https://api.open-meteo.com.example.org/v1/forecast")
+            module.get_weather_by_city_name("北京")
+            self.assertIsNone(mock_get.call_args.kwargs["proxies"])
+            module = DataProcessingModule()
+            module._fetch_geocoding("Tokyo")
+            self.assertNotIn("proxies", mock_get.call_args.kwargs)
+
+    @patch("src.data.data_processing.requests.get")
+    def test_empty_proxy_preserves_default_network_behavior(self, mock_get):
+        mock_get.return_value.json.return_value = {}
+        with patch.object(config, "PROXY", ""):
+            module = DataProcessingModule(api_url="https://api.open-meteo.com/v1/forecast")
+            module.get_weather_by_city_name("北京")
+        self.assertIsNone(mock_get.call_args.kwargs["proxies"])
 
     @patch("src.data.data_processing.requests.get")
     def test_get_weather_data_with_open_meteo_payload(self, mock_get):

@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 
 type ModelPickerDrawerProps = {
   open: boolean
+  target?: 'chat' | 'embedding'
   title: string
   selectedModel?: string
   onClose: () => void
@@ -98,6 +99,7 @@ function ModelOptionCard({
 
 export function ModelPickerDrawer({
   open,
+  target = 'chat',
   title,
   selectedModel,
   onClose,
@@ -107,10 +109,11 @@ export function ModelPickerDrawer({
     return null
   }
 
-  return <ModelPickerDialog title={title} selectedModel={selectedModel} onClose={onClose} onSelect={onSelect} />
+  return <ModelPickerDialog target={target} title={title} selectedModel={selectedModel} onClose={onClose} onSelect={onSelect} />
 }
 
 function ModelPickerDialog({
+  target,
   title,
   selectedModel,
   onClose,
@@ -127,7 +130,7 @@ function ModelPickerDialog({
     startTransition(async () => {
       setError(null)
       try {
-        const response = await fetch('/api/settings/openai-models', { cache: 'no-store' })
+        const response = await fetch(`/api/settings/openai-models?target=${target || 'chat'}`, { cache: 'no-store' })
         const payload = (await response.json().catch(() => null)) as
           | { detail?: unknown; source?: string; models?: OpenAiModelListItem[] }
           | null
@@ -144,7 +147,7 @@ function ModelPickerDialog({
         setError(requestError instanceof Error ? requestError.message : '读取模型列表失败')
       }
     })
-  }, [])
+  }, [target])
 
   const filteredModels = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()

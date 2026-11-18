@@ -29,7 +29,7 @@ _PLAN_ID_PATTERN = re.compile(r"\bplan_[a-zA-Z0-9]+\b")
 
 
 class HydroChatOpenAI(ChatOpenAI):
-    """ChatOpenAI variant that preserves DeepSeek reasoning_content across turns."""
+    """Preserve DeepSeek reasoning and adapt instructions for Responses gateways."""
 
     async def _astream(self, messages: list[Any], *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
         async for chunk in super()._astream(_sanitize_chat_messages(messages), *args, **kwargs):
@@ -66,6 +66,11 @@ class HydroChatOpenAI(ChatOpenAI):
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        # Compatible Responses gateways can reject system-role input items.
+        # Change the wire role only; keep stored messages and chat payloads intact.
+        for item in payload.get("input", []):
+            if isinstance(item, dict) and item.get("role") == "system":
+                item["role"] = "developer"
         if "messages" in payload:
             msgs = self._convert_input(input_).to_messages()
             for msg, msg_dict in zip(msgs, payload["messages"]):
@@ -107,6 +112,7 @@ class HydroDeepAgent:
             base_url=config.OPENAI_BASE_URL,
             temperature=0.2,
             streaming=True,
+            use_responses_api={"auto": None, "responses": True, "chat_completions": False}[config.OPENAI_WIRE_API],
         )
 
         self._mcp_client = MultiServerMCPClient(

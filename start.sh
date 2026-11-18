@@ -171,6 +171,7 @@ wait_for_http() {
   local delay_seconds="${4:-1}"
   local pid="${5:-}"
   local log_file="${6:-}"
+  local method="${7:-GET}"
   local attempt
 
   if ! command -v curl >/dev/null 2>&1; then
@@ -188,7 +189,7 @@ wait_for_http() {
       fail "${label} process exited before readiness check passed"
     fi
 
-    if curl -fsS "${url}" >/dev/null 2>&1; then
+    if curl -fsS --request "${method}" "${url}" >/dev/null 2>&1; then
       log "${label} is ready: ${url}"
       return 0
     fi
@@ -250,6 +251,7 @@ main() {
       wait_for_http "http://${BACKEND_HOST}:${BACKEND_PORT}/api/health" "Backend" 60 1 "${BACKEND_PID}" "${LOG_DIR}/backend.log"
       start_frontend
       wait_for_http "http://${FRONTEND_HOST}:${FRONTEND_PORT}" "Frontend" 60 1 "${FRONTEND_PID}" "${LOG_DIR}/frontend.log"
+      wait_for_http "http://${FRONTEND_HOST}:${FRONTEND_PORT}/api/auth/login" "Frontend login route" 60 1 "${FRONTEND_PID}" "${LOG_DIR}/frontend.log" OPTIONS
       ;;
     backend)
       start_backend
@@ -258,6 +260,7 @@ main() {
     frontend)
       start_frontend
       wait_for_http "http://${FRONTEND_HOST}:${FRONTEND_PORT}" "Frontend" 60 1 "${FRONTEND_PID}" "${LOG_DIR}/frontend.log"
+      wait_for_http "http://${FRONTEND_HOST}:${FRONTEND_PORT}/api/auth/login" "Frontend login route" 60 1 "${FRONTEND_PID}" "${LOG_DIR}/frontend.log" OPTIONS
       ;;
   esac
 
