@@ -199,6 +199,8 @@ export type RuntimeSettings = {
   default_duration_minutes: number
   alarm_threshold: number
   alarm_enabled: boolean
+  llm_provider?: 'openai' | 'minimax'
+  embedding_provider?: 'openai' | 'ollama'
   model_name?: string
   embedding_model_name?: string
   embedding_base_url?: string | null
@@ -213,6 +215,8 @@ export type RuntimeSettings = {
   db_type?: string
   config_source?: string
   yaml_settings?: {
+    llm_provider?: 'openai' | 'minimax'
+    embedding_provider?: 'openai' | 'ollama'
     model_name?: string
     embedding_model_name?: string
     embedding_base_url?: string | null

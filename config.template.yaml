@@ -3,13 +3,29 @@
 # Optional proxy used only for api.open-meteo.com forecast requests.
 proxy: ""
 
-openai_api_key: sk-xxx-your-openai-key
-openai_base_url: https://your-openai-base-url/v1
-openai_wire_api: auto  # auto | responses | chat_completions; Codex wire_api=responses uses responses
-model_name: gpt-4o  # 指定用于LangChain智能体的模型名
-embedding_model_name: text-embedding-3-small  # 指定知识库 embeddings 模型
-embedding_base_url: ""  # Optional independent embeddings URL; empty uses openai_base_url.
-# embedding_api_key: sk-xxx-your-embeddings-key  # 可选；未配置时回退到 openai_api_key
+# provider is optional: otherwise the first provider with a model_name is selected.
+llm_model:
+  # provider: openai  # openai | minimax
+  openai:
+    openai_api_key: ""
+    openai_base_url: https://api.openai.com/v1
+    openai_wire_api: responses  # auto | responses | chat_completions
+    model_name: gpt-6.1-sol
+  minimax:
+    minimax_api_key: ""
+    minimax_base_url: ""  # Empty uses https://api.minimax.io/v1
+    model_name: ""
+    # minimax_wire_api: chat_completions
+
+embedding_model:
+  # provider: ollam  # openai | ollama | ollam (compatible spelling)
+  ollam:
+    embedding_base_url: http://127.0.0.1:11434
+    embedding_model_name: bge-m3:latest
+  # openai:
+  #   embedding_base_url: https://api.openai.com/v1
+  #   embedding_api_key: ""  # Empty falls back to the active chat key.
+  #   embedding_model_name: text-embedding-3-small
 
 knowledge_base:
   top_k: 4

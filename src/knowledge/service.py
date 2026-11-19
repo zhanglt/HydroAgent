@@ -248,6 +248,27 @@ class KnowledgeBaseService:
         return self._collection
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if config.EMBEDDING_PROVIDER == "ollama":
+            import httpx
+
+            vectors = []
+            headers = {"Authorization": f"Bearer {config.EMBEDDING_API_KEY}"} if config.EMBEDDING_API_KEY else {}
+            with httpx.Client(timeout=120, headers=headers) as client:
+                for start in range(0, len(texts), 32):
+                    batch = texts[start:start + 32]
+                    response = client.post(
+                        config.EMBEDDING_BASE_URL.rstrip("/") + "/api/embed",
+                        json={"model": config.EMBEDDING_MODEL_NAME, "input": batch, "truncate": False},
+                    )
+                    response.raise_for_status()
+                    items = response.json().get("embeddings")
+                    if not isinstance(items, list) or len(items) != len(batch) or any(
+                        not isinstance(vector, list) or not vector for vector in items
+                    ):
+                        raise KnowledgeBaseError("Ollama returned invalid embedding vectors.")
+                    vectors.extend(items)
+            return vectors
+
         api_key = config.EMBEDDING_API_KEY or config.OPENAI_API_KEY
         if not api_key:
             raise KnowledgeBaseError("尚未配置 embeddings API Key，无法构建知识库向量。")

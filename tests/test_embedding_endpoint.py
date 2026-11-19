@@ -11,6 +11,11 @@ from src.knowledge.service import KnowledgeBaseService
 
 
 class TestEmbeddingRequests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(config, "EMBEDDING_PROVIDER", "openai")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_embedding_sdk_uses_independent_url_key_and_model(self):
         requests = []
 
@@ -51,6 +56,9 @@ class TestEmbeddingRequests(unittest.TestCase):
 
 class TestEmbeddingSettingsApi(unittest.TestCase):
     def setUp(self):
+        patcher = patch.object(config, "EMBEDDING_PROVIDER", "openai")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         from test_console_performance import TestConsoleApi
         self.fixture = TestConsoleApi(methodName="test_permission_failures_are_not_empty_success")
         self.fixture.setUp()
@@ -92,3 +100,29 @@ class TestEmbeddingSettingsApi(unittest.TestCase):
             self.assertEqual(response.json()["settings"]["embedding_base_url"], "https://vectors.example/v1")
             save.assert_called_once_with({"embedding_base_url": "https://vectors.example/v1"})
             agent.return_value.reload.assert_awaited_once()
+
+    def test_ollama_models_use_native_tags_without_chat_credentials(self):
+        upstream = Mock(ok=True, headers={"content-type": "application/json"})
+        upstream.json.return_value = {"models": [{"name": "bge-m3:latest"}]}
+        with patch.object(config, "EMBEDDING_PROVIDER", "ollama"), \
+             patch.object(config, "EMBEDDING_BASE_URL", "http://localhost:11434"), \
+             patch.object(config, "EMBEDDING_API_KEY", None), \
+             patch("requests.get", return_value=upstream) as fetch:
+            response = self.fixture.client.get("/api/settings/openai-models?target=embedding", headers=self.fixture.headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["models"][0]["id"], "bge-m3:latest")
+            self.assertEqual(fetch.call_args.args[0], "http://localhost:11434/api/tags")
+            self.assertNotIn("Authorization", fetch.call_args.kwargs["headers"])
+
+    def test_provider_selection_is_saved_and_reloads_agent(self):
+        snapshot = {**config.get_yaml_settings(), "llm_provider": "minimax", "embedding_provider": "ollama"}
+        with patch.object(config, "update_yaml_settings", return_value=snapshot) as save, \
+             patch("src.llm.langchain_agent.get_hydro_agent") as agent:
+            agent.return_value.reload = AsyncMock()
+            response = self.fixture.client.put("/api/settings", headers=self.fixture.headers,
+                                               json={"llm_provider": "minimax", "embedding_provider": "ollama"})
+            self.assertEqual(response.status_code, 200)
+            save.assert_called_once_with({"llm_provider": "minimax", "embedding_provider": "ollama"})
+            agent.return_value.reload.assert_awaited_once()
+            response = self.fixture.client.put("/api/settings", headers=self.fixture.headers, json={"llm_provider": "invalid"})
+            self.assertEqual(response.status_code, 422)

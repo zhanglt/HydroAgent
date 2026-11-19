@@ -1,6 +1,7 @@
 """
 配置管理模块 - 负责加载和提供配置信息
 """
+import copy
 import os
 import tempfile
 import yaml
@@ -66,12 +67,6 @@ class Config:
         self.MODEL_PATH = os.getenv("MODEL_PATH") or self._get_from_yaml("ml_model.path", None)
         self.MODEL_INPUT_SIZE = int(os.getenv("MODEL_INPUT_SIZE") or self._get_from_yaml("ml_model.input_size", 6))
         self.MODEL_HIDDEN_SIZE = int(os.getenv("MODEL_HIDDEN_SIZE") or self._get_from_yaml("ml_model.hidden_size", 50))
-        self.MODEL_NAME = self._config_from_yaml.get('model_name') or 'gpt-4o'
-        self.EMBEDDING_MODEL_NAME = (
-            self._config_from_yaml.get('embedding_model_name')
-            or 'text-embedding-3-small'
-        )
-        
         # 报警配置（仅作为历史 YAML 回填值，运行期业务配置改由数据库托管）
         self.LEGACY_ALARM_THRESHOLD = float(self._get_from_yaml("alarm.soil_moisture_threshold", 25.0))
         self.LEGACY_ALARM_ENABLED = bool(self._get_from_yaml("alarm.enabled", True))
@@ -82,24 +77,7 @@ class Config:
         self.LOG_LEVEL = os.getenv("LOG_LEVEL") or self._get_from_yaml("logging.level", "INFO")
         self.LOG_FILE = os.getenv("LOG_FILE") or self._get_from_yaml("logging.file", "irrigation_system.log")
         
-        # LLM/OPENAI配置
-        self.OPENAI_API_KEY = self._resolve_secret(
-            env_key='OPENAI_API_KEY',
-            yaml_key='openai_api_key',
-        )
-        self.OPENAI_BASE_URL = (
-            self._config_from_yaml.get('openai_base_url')
-            or "https://api.openai.com/v1"
-        )
-        self.OPENAI_WIRE_API = self._validate_openai_wire_api(
-            self._config_from_yaml.get("openai_wire_api", "auto")
-        )
-        self.EMBEDDING_BASE_URL = str(self._config_from_yaml.get("embedding_base_url") or "").strip() or None
-        self.EMBEDDING_API_KEY = self._resolve_secret(
-            env_key='EMBEDDING_API_KEY',
-            yaml_key='embedding_api_key',
-            fallback=self.OPENAI_API_KEY,
-        )
+        self._load_model_settings()
         self.LEGACY_KNOWLEDGE_TOP_K = int(self._get_from_yaml('knowledge_base.top_k', 4))
         self.LEGACY_KNOWLEDGE_CHUNK_SIZE = int(self._get_from_yaml('knowledge_base.chunk_size', 1200))
         self.LEGACY_KNOWLEDGE_CHUNK_OVERLAP = int(self._get_from_yaml('knowledge_base.chunk_overlap', 180))
@@ -141,16 +119,72 @@ class Config:
                 return default
         return value
 
+    # Ignore values exported by this loader when resolving a different provider.
+    _synced_environment = {}
+
     def _resolve_secret(self, *, env_key, yaml_key, fallback=None):
         env_value = os.getenv(env_key)
-        if env_value:
+        if env_value and env_value != self._synced_environment.get(env_key):
             return env_value
+        return self._get_from_yaml(yaml_key) or fallback
 
-        plain_value = self._config_from_yaml.get(yaml_key)
-        if plain_value:
-            return plain_value
+    def _select_provider(self, section, supported, default):
+        entries = self._config_from_yaml.get(section)
+        if entries is None:
+            return default, None
+        if not isinstance(entries, dict):
+            raise ValueError(f"{section} must be a mapping")
+        selected = entries.get("provider")
+        if selected is None:
+            selected = next((name for name, value in entries.items()
+                             if name in supported and isinstance(value, dict)
+                             and value.get("model_name" if section == "llm_model" else "embedding_model_name")), default)
+        if selected not in supported:
+            raise ValueError(f"Unsupported {section} provider: {selected}")
+        block = entries.get(selected) or {}
+        if not isinstance(block, dict):
+            raise ValueError(f"{section}.{selected} must be a mapping")
+        return selected, block
 
-        return fallback
+    def _load_model_settings(self):
+        self.LLM_PROVIDER, llm = self._select_provider("llm_model", {"openai", "minimax"}, "openai")
+        prefix = self.LLM_PROVIDER
+        if llm is None:
+            llm = self._config_from_yaml
+            root = ""
+        else:
+            root = f"llm_model.{prefix}."
+        self.MODEL_NAME = llm.get("model_name") or ("MiniMax-M2.5" if prefix == "minimax" else "gpt-4o")
+        # Retain the legacy OPENAI_* attributes as aliases for the active chat provider.
+        self.OPENAI_API_KEY = self._resolve_secret(env_key=f"{prefix.upper()}_API_KEY", yaml_key=f"{root}{prefix}_api_key")
+        self.OPENAI_BASE_URL = llm.get(f"{prefix}_base_url") or (
+            "https://api.minimax.io/v1" if prefix == "minimax" else "https://api.openai.com/v1")
+        self.OPENAI_WIRE_API = self._validate_openai_wire_api(
+            llm.get(f"{prefix}_wire_api") or ("chat_completions" if prefix == "minimax" else "auto"))
+        self.EMBEDDING_PROVIDER, embedding = self._select_provider(
+            "embedding_model", {"openai", "ollama", "ollam"}, "openai")
+        self._embedding_yaml_provider = self.EMBEDDING_PROVIDER
+        if self.EMBEDDING_PROVIDER == "ollam":
+            self.EMBEDDING_PROVIDER = "ollama"
+        embedding_root = "" if embedding is None else f"embedding_model.{self._embedding_yaml_provider}."
+        if embedding is None:
+            embedding = self._config_from_yaml
+        self.EMBEDDING_MODEL_NAME = embedding.get("embedding_model_name") or (
+            "bge-m3:latest" if self.EMBEDDING_PROVIDER == "ollama" else "text-embedding-3-small")
+        self.EMBEDDING_BASE_URL = str(embedding.get("embedding_base_url") or "").strip() or (
+            "http://127.0.0.1:11434" if self.EMBEDDING_PROVIDER == "ollama" else None)
+        self.EMBEDDING_API_KEY = self._resolve_secret(
+            env_key="EMBEDDING_API_KEY", yaml_key=f"{embedding_root}embedding_api_key",
+            fallback=self.OPENAI_API_KEY if self.EMBEDDING_PROVIDER == "openai" else None)
+
+    def _model_setting_path(self, key):
+        if key.startswith("embedding_"):
+            if "embedding_model" in self._config_from_yaml:
+                return f"embedding_model.{self._embedding_yaml_provider}.{key}"
+        elif "llm_model" in self._config_from_yaml:
+            field = key.replace("openai_", f"{self.LLM_PROVIDER}_", 1)
+            return f"llm_model.{self.LLM_PROVIDER}.{field}"
+        return key
 
     def _set_in_yaml(self, path, value):
         """按点路径写入嵌套 YAML 配置。"""
@@ -191,7 +225,7 @@ class Config:
     def sync_yaml_to_environment(self):
         """将 YAML 托管的模型/密钥配置同步到进程环境变量，兼容依赖 env 的库。"""
         env_mapping = {
-            "OPENAI_API_KEY": self.OPENAI_API_KEY,
+            f"{self.LLM_PROVIDER.upper()}_API_KEY": self.OPENAI_API_KEY,
             "EMBEDDING_API_KEY": self.EMBEDDING_API_KEY,
             "EMBEDDING_BASE_URL": self.EMBEDDING_BASE_URL or self.OPENAI_BASE_URL,
             "OPENAI_BASE_URL": self.OPENAI_BASE_URL,
@@ -199,7 +233,10 @@ class Config:
             "EMBEDDING_MODEL_NAME": self.EMBEDDING_MODEL_NAME,
         }
         for key, value in env_mapping.items():
+            if key.endswith("_API_KEY") and os.getenv(key) and os.getenv(key) != self._synced_environment.get(key):
+                continue
             normalized = str(value or "").strip()
+            self._synced_environment[key] = normalized
             if normalized:
                 os.environ[key] = normalized
             else:
@@ -208,6 +245,8 @@ class Config:
     def get_yaml_settings(self):
         """返回由 YAML 托管的模型与环境配置快照。"""
         return {
+            "llm_provider": self.LLM_PROVIDER,
+            "embedding_provider": self.EMBEDDING_PROVIDER,
             "model_name": self.MODEL_NAME,
             "embedding_model_name": self.EMBEDDING_MODEL_NAME,
             "embedding_base_url": self.EMBEDDING_BASE_URL,
@@ -227,45 +266,41 @@ class Config:
         """将前端结构化设置映射回 config.yaml，并同步刷新运行时配置。"""
         if updates.get("openai_wire_api") is not None:
             self._validate_openai_wire_api(updates["openai_wire_api"])
-        mapping = {
-            "model_name": ("model_name", str),
-            "embedding_model_name": ("embedding_model_name", str),
-            "embedding_base_url": ("embedding_base_url", str),
-            "openai_base_url": ("openai_base_url", str),
-            "openai_wire_api": ("openai_wire_api", str),
-        }
-
-        for key, value in updates.items():
-            if key not in mapping or value is None:
+        # Validate the complete candidate before persisting any change.
+        candidate = copy.copy(self)
+        candidate._config_from_yaml = copy.deepcopy(self._config_from_yaml)
+        for field, section, supported in (
+            ("llm_provider", "llm_model", {"openai", "minimax"}),
+            ("embedding_provider", "embedding_model", {"openai", "ollama", "ollam"}),
+        ):
+            if updates.get(field) is not None:
+                provider = updates[field]
+                if provider not in supported:
+                    raise ValueError(f"Unsupported {field}: {provider}")
+                # Preserve legacy settings when first enabling provider selection.
+                if section not in candidate._config_from_yaml:
+                    keys = (["model_name", "openai_base_url", "openai_wire_api", "openai_api_key"]
+                            if section == "llm_model" else
+                            ["embedding_model_name", "embedding_base_url", "embedding_api_key"])
+                    candidate._config_from_yaml[section] = {"openai": {
+                        key: candidate._config_from_yaml[key] for key in keys if key in candidate._config_from_yaml}}
+                if provider == "ollama" and "ollam" in candidate._config_from_yaml[section] and "ollama" not in candidate._config_from_yaml[section]:
+                    provider = "ollam"
+                candidate._set_in_yaml(f"{section}.provider", provider)
+        candidate._load_model_settings()
+        for key in ("model_name", "embedding_model_name", "embedding_base_url", "openai_base_url",
+                    "openai_wire_api", "openai_api_key", "embedding_api_key"):
+            if key not in updates or updates[key] is None:
                 continue
-            path, caster = mapping[key]
-            self._set_in_yaml(path, caster(value))
-
-        self._update_secret_in_yaml(
-            updates=updates,
-            runtime_attr="OPENAI_API_KEY",
-            plain_yaml_key="openai_api_key",
-            update_key="openai_api_key",
-        )
-        self._update_secret_in_yaml(
-            updates=updates,
-            runtime_attr="EMBEDDING_API_KEY",
-            plain_yaml_key="embedding_api_key",
-            update_key="embedding_api_key",
-            fallback_attr="OPENAI_API_KEY",
-        )
-
-        self._write_yaml()
-        if "model_name" in updates and updates["model_name"] is not None:
-            self.MODEL_NAME = str(updates["model_name"])
-        if "embedding_model_name" in updates and updates["embedding_model_name"] is not None:
-            self.EMBEDDING_MODEL_NAME = str(updates["embedding_model_name"])
-        if "embedding_base_url" in updates:
-            self.EMBEDDING_BASE_URL = str(updates["embedding_base_url"] or "").strip() or None
-        if "openai_base_url" in updates:
-            self.OPENAI_BASE_URL = str(updates["openai_base_url"] or "").strip() or None
-        if updates.get("openai_wire_api") is not None:
-            self.OPENAI_WIRE_API = updates["openai_wire_api"]
+            path = candidate._model_setting_path(key)
+            value = str(updates[key]).strip()
+            if key.endswith("api_key") and not value:
+                candidate._delete_in_yaml(path)
+            else:
+                candidate._set_in_yaml(path, value)
+        candidate._load_model_settings()
+        candidate._write_yaml()
+        self.__dict__.update(candidate.__dict__)
         self.sync_yaml_to_environment()
 
         return self.get_yaml_settings()
@@ -280,29 +315,6 @@ class Config:
         """兼容旧调用；现仅更新 YAML 托管字段。"""
         return self.update_yaml_settings(updates)
 
-    def _update_secret_in_yaml(
-        self,
-        *,
-        updates,
-        runtime_attr,
-        plain_yaml_key,
-        update_key,
-        fallback_attr=None,
-    ):
-        if update_key not in updates:
-            return
-
-        raw_value = updates.get(update_key)
-        normalized = str(raw_value or "").strip()
-        if not normalized:
-            self._delete_in_yaml(plain_yaml_key)
-            fallback_value = getattr(self, fallback_attr) if fallback_attr else None
-            setattr(self, runtime_attr, fallback_value)
-            return
-
-        self._set_in_yaml(plain_yaml_key, normalized)
-        setattr(self, runtime_attr, normalized)
-    
     def get_db_uri(self):
         """
         返回数据库连接URI字符串。

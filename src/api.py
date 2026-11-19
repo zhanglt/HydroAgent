@@ -147,6 +147,8 @@ def _redact_sensitive_settings(updates: dict) -> dict:
 
 def _should_reload_agent(updates: dict) -> bool:
     reload_keys = {
+        "llm_provider",
+        "embedding_provider",
         "model_name",
         "openai_base_url",
         "openai_wire_api",
@@ -212,6 +214,8 @@ class SettingsUpdateRequest(PydanticModel):
     alarm_threshold: Optional[float] = None
     alarm_enabled: Optional[bool] = None
     collection_interval_minutes: Optional[int] = None
+    llm_provider: Optional[Literal["openai", "minimax"]] = None
+    embedding_provider: Optional[Literal["openai", "ollama", "ollam"]] = None
     model_name: Optional[str] = None
     embedding_model_name: Optional[str] = None
     embedding_base_url: Optional[str] = None
@@ -1270,6 +1274,8 @@ async def update_settings(
 
     updates = req.model_dump(exclude_none=True) if hasattr(req, "model_dump") else req.dict(exclude_none=True)
     yaml_update_keys = {
+        "llm_provider",
+        "embedding_provider",
         "model_name",
         "embedding_model_name",
         "embedding_base_url",
@@ -1324,16 +1330,19 @@ async def list_openai_models(
     import requests
 
     api_key = (config.EMBEDDING_API_KEY or config.OPENAI_API_KEY) if target == "embedding" else config.OPENAI_API_KEY
-    if not api_key:
-        raise HTTPException(status_code=400, detail="尚未配置 OpenAI API Key。请先在系统设置中保存 key。")
+    ollama = target == "embedding" and config.EMBEDDING_PROVIDER == "ollama"
+    if ollama:
+        api_key = config.EMBEDDING_API_KEY
+    if not api_key and not ollama:
+        raise HTTPException(status_code=400, detail="尚未配置所选模型服务的 API Key。")
 
     base_url = (config.EMBEDDING_BASE_URL or config.OPENAI_BASE_URL) if target == "embedding" else config.OPENAI_BASE_URL
-    request_url = _resolve_models_url(base_url, model_id=model_id)
+    request_url = base_url.rstrip("/") + "/api/tags" if ollama else _resolve_models_url(base_url, model_id=model_id)
     try:
         response = requests.get(
             request_url,
             headers={
-                "Authorization": f"Bearer {api_key}",
+                **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
                 "Accept": "application/json",
             },
             timeout=15,
@@ -1349,6 +1358,16 @@ async def list_openai_models(
 
     if not response.ok:
         raise HTTPException(status_code=response.status_code, detail=payload)
+
+    if ollama:
+        items = [{"id": item.get("name") or item.get("model"), "owned_by": "ollama", "created": item.get("modified_at")}
+                 for item in payload.get("models", []) if isinstance(item, dict)]
+        payload = {"data": items}
+        if model_id:
+            matched = next((item for item in items if item["id"] == model_id), None)
+            if matched is None:
+                raise HTTPException(status_code=404, detail="Ollama model not found")
+            payload = {"data": matched}
 
     if model_id:
         item = payload.get("data") if isinstance(payload, dict) else payload

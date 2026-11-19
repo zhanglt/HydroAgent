@@ -2,6 +2,8 @@
 
 日期：2026-11-18。
 
+2026-11-19 更新：以下记录描述旧版平铺配置，仍然兼容。新版支持 `embedding_model.openai` 与 `embedding_model.ollama`（兼容 `ollam`），配置及切换规则见[多模型服务配置](model-provider-configuration.md)。
+
 ## 配置
 
 `config.yaml` 新增顶层 `embedding_base_url`，与 `embedding_model_name`、已有的 `embedding_api_key` 配套使用：

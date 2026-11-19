@@ -22,6 +22,15 @@ HydroAgent 是一个面向农业灌溉场景的智能决策与运营管理系统
 - **存储**：SQLAlchemy 负责业务数据；LangGraph SQLite persistence 负责对话与工具调用轨迹；Chroma 支持知识库向量检索。
 - **部署**：支持本地脚本、Dockerfile 和 Docker Compose。
 
+## 项目文档
+
+面向研发交接与维护的反向工程文档，以当前源码为依据，区分已实现、模拟、降级及未验证能力：
+
+- [文档索引与验证记录](docs/README.md)
+- [项目需求规格说明书](docs/项目需求规格说明书.md)：角色、功能需求、业务规则、验收条件及实现差异。
+- [项目概要设计说明书](docs/项目概要设计说明书.md)：系统架构、模块职责、数据存储、状态流转和部署边界。
+- [项目详细设计说明书](docs/项目详细设计说明书.md)：接口契约、算法、状态机、数据字典、工具与前端映射、需求测试追踪。
+
 ## 目录结构
 
 ```text
@@ -76,25 +85,40 @@ cp config.template.yaml config.yaml
 根据实际环境修改 `config.yaml`：
 
 ```yaml
-openai_api_key: sk-xxx-your-openai-key
-openai_base_url: https://your-openai-base-url/v1
-openai_wire_api: auto
-model_name: gpt-4o
-embedding_model_name: text-embedding-3-small
-embedding_base_url: ""  # 单独指定向量服务地址，留空复用 openai_base_url
+proxy: http://10.0.0.8:30000
 
+llm_model:
+  openai:
+    openai_api_key: ""  # 填写本地密钥，或设置 OPENAI_API_KEY
+    openai_base_url: https://gateway.example/openai
+    openai_wire_api: responses
+    model_name: gpt-6.1-sol
+  minimax:
+    minimax_api_key: ""
+    minimax_base_url: ""
+    model_name: ""
+
+embedding_model:
+  ollam:
+    embedding_base_url: http://127.0.0.1:11434
+    embedding_model_name: bge-m3:latest
+
+knowledge_base:
+  top_k: 4
+  chunk_size: 1200
+  chunk_overlap: 180
 apis:
-  weather_service_url: "https://api.open-meteo.com/v1/forecast"
+  weather_service_url: https://api.open-meteo.com/v1/forecast
 ```
 
 常用配置项：
 
-- `openai_api_key`：LLM 与知识库能力使用的 API Key。
-- `openai_base_url`：OpenAI 兼容接口地址。
-- `openai_wire_api`：聊天协议，支持 `auto`（默认）、`responses`、`chat_completions`。设置页“聊天 API 协议”可修改并热重载；不影响 Embeddings 接口。
-- `model_name`：智能体对话和计划生成使用的模型。
-- `embedding_model_name`：知识库向量化使用的模型。
-- `embedding_base_url`：独立的向量服务基础 URL；未配置或留空时复用 `openai_base_url`。设置页“知识引擎”可修改，Embeddings 模型列表也使用该地址和对应的向量 API Key。
+- `llm_model`：聊天服务商分组，支持 `openai` 与 `minimax`。OpenAI 分组也可配置其他 OpenAI 兼容服务。未指定 `provider` 时，按 YAML 顺序选择首个填写了 `model_name` 的分组；全部留空时默认 OpenAI。
+- `llm_model.provider`：可选，显式选择 `openai` 或 `minimax`，例如在两个分组均配置时切换服务商。
+- `llm_model.openai.openai_wire_api`：支持 `auto`、`responses` 和 `chat_completions`。MiniMax 使用 OpenAI 兼容 Chat Completions，默认地址为 `https://api.minimax.io/v1`，可用 `minimax_base_url` 覆盖。
+- `embedding_model`：独立选择向量服务；`ollam` 与 `ollama` 等价，调用原生 `/api/embed`，本地服务无需 Key。地址填写服务根 URL。可运行 `ollama pull bge-m3:latest` 安装示例模型。
+- `embedding_model.provider`：可选，选择 `ollam`、`ollama` 或 `openai`。`openai` 分组使用 `embedding_model_name`、`embedding_base_url`、`embedding_api_key`；地址和 Key 未配置时回退到当前聊天服务。选择规则与聊天一致，但模型字段为 `embedding_model_name`。
+- 原有顶层模型配置仍兼容；存在新的分组时使用分组配置。设置页显示当前服务商，保存模型、地址、协议时写回对应分组；也可通过设置 API 切换 provider。完整规则见[多模型服务配置](docs/model-provider-configuration.md)。
 - `apis.weather_service_url`：天气预报服务地址。
 - `proxy`：`api.open-meteo.com` 天气预报请求使用的代理，例如 `http://10.0.0.8:30000`；未配置或为空时沿用 Requests 的默认网络行为。此配置不修改聊天、Embeddings、自定义天气地址或地理编码请求的代理。
 - `database`：数据库配置；未配置时使用本地 SQLite。
@@ -108,17 +132,19 @@ proxy: http://10.0.0.8:30000
 如果第三方服务在 Codex 中配置 `wire_api = "responses"`，本项目对应配置为：
 
 ```yaml
-openai_base_url: https://gateway.example/openai
-openai_wire_api: responses
-model_name: gpt-6.1-sol
+llm_model:
+  openai:
+    openai_base_url: https://gateway.example/openai
+    openai_wire_api: responses
+    model_name: gpt-6.1-sol
 ```
 
 以上域名为占位示例，实际服务地址仅填写在本地私有 `config.yaml`，不要写入待提交的文档或日志。`openai_base_url` 保留服务商给出的基础地址，不追加 `/responses`；SDK 根据协议追加路径。Responses 模式使用流式请求，并将系统指令的出站角色映射为 `developer`，兼容拒绝 `system` 角色的网关。Chat Completions 模式继续保留原消息格式与 DeepSeek 推理字段。故障原因和验证见[第三方 Responses 400 修复记录](docs/fix-responses-gateway-400.md)。
 
-生产或多人环境建议在 `config.yaml` 中直接配置 API Key，也可通过环境变量覆盖：
+API Key 可写在本地 `config.yaml`，也可通过对应的环境变量覆盖：
 
 ```bash
-export OPENAI_API_KEY="sk-xxx"           # 覆盖 config.yaml 中的 openai_api_key
+export OPENAI_API_KEY="sk-xxx"           # 覆盖 llm_model.openai.openai_api_key
 export HYDROAUTH_SECRET="change-this-auth-secret"
 ```
 

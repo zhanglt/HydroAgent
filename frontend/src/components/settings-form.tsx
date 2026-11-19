@@ -328,6 +328,12 @@ export function SettingsForm({
       case 'general':
         return (
           <SettingsSection id="general" title="常规" description="YAML 托管的聊天模型、推理 endpoint 与基础业务节奏。">
+            <ReadonlyItem
+              label="聊天服务商"
+              path="llm_model.provider"
+              value={settings.llm_provider || 'openai'}
+              detail="由 config.yaml 选择；下方模型、地址和协议对应当前服务商。"
+            />
             <SettingsItem
               label="聊天模型"
               path="model_name"
@@ -402,6 +408,12 @@ export function SettingsForm({
       case 'knowledge':
         return (
           <SettingsSection id="knowledge" title="知识引擎" description="Embeddings 模型、知识库切片与召回参数。">
+            <ReadonlyItem
+              label="向量服务商"
+              path="embedding_model.provider"
+              value={settings.embedding_provider || 'openai'}
+              detail="由 config.yaml 选择，支持 OpenAI 兼容接口与 Ollama 原生接口。"
+            />
             <SettingsItem
               label="Embeddings 模型"
               path="embedding_model_name"
@@ -425,7 +437,7 @@ export function SettingsForm({
             <SettingsItem
               label="Embeddings Endpoint"
               path="embedding_base_url"
-              detail="独立向量服务基础地址，留空时使用聊天 Endpoint；保存后用于向量请求与模型列表。"
+              detail="Ollama 填写服务根地址（例如 http://127.0.0.1:11434）；OpenAI 兼容服务留空时使用聊天地址。"
               control={
                 <Input
                   className={compactInputClass}
@@ -439,7 +451,7 @@ export function SettingsForm({
               label="Embeddings Key 状态"
               path="embedding_api_key"
               value={formatSecretStatusLabel(settings.embedding_api_key_status?.configured, settings.embedding_api_key_status?.masked_value)}
-              detail="由服务端 config.yaml 管理；未单独配置时，后端回退到聊天 API Key。"
+              detail="由服务端 config.yaml 管理；Ollama 本地服务无需密钥，OpenAI 兼容服务未配置时回退到聊天密钥。"
             />
             <SettingsItem
               label="默认召回条数"
